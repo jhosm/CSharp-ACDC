@@ -70,6 +70,10 @@ Future<void> set(CacheResponse response) async {
 }
 ```
 
+> **Added from review:** The `memoryStore.set()` is `await`ed but `persistentStore.set()` is `unawaited()`. This means if the process exits immediately after a write, L2 may not have the data. For the C# server port with Redis as L2, this could mean lost cache entries on app shutdown. Consider awaiting the L2 write or providing a graceful shutdown mechanism.
+
+> **Added from review:** The `getFromPath()` method (`two_tier_cache_store.dart:132-160`) merges results from both tiers and deduplicates by key, preferring the memory tier's version. This deduplication behavior is important for the C# port.
+
 ### 1.3 CacheStoreFactory
 
 **Source**: `lib/src/cache/cache_store_factory.dart`
@@ -154,6 +158,26 @@ maxStale: (config.staleIfError || config.staleWhileRevalidate)
 hitCacheOnErrorCodes: config.staleIfError ? [401, 403] : [],
 ```
 
+> **Review correction:** The `maxStale` code shown is from the first `CacheOptions` block (`cache_interceptor.dart:54-57`). However, the `_dioCacheInterceptor` that actually handles non-SWR requests uses a second `CacheOptions` block (`cache_interceptor.dart:88`) with a different condition:
+> ```dart
+> maxStale: config.staleIfError ? const Duration(days: 7) : null,
+> ```
+> The second block does NOT include `staleWhileRevalidate` in the `maxStale` condition. This discrepancy means SWR-only scenarios may not get the 7-day `maxStale` from the delegated interceptor.
+
+> **Added from review:** `hitCacheOnErrorCodes: [401, 403]` means that 401 Unauthorized and 403 Forbidden responses will trigger serving stale cache instead of propagating the error. This could mask authentication/authorization issues. The C# port should carefully decide whether to replicate this behavior or restrict to 5xx errors only.
+
+> **Added from review:** The `AcdcCacheInterceptor` constructor builds **two** `CacheOptions` objects:
+> 1. `_cacheOptions` (lines 48-80) — used for SWR cache lookups and key building
+> 2. A second one passed to `DioCacheInterceptor` (lines 82-113) — used for all standard request/response/error handling
+>
+> These have subtly different `maxStale` conditions. The SWR logic and the standard cache logic use different policy configurations. The C# port must be aware of this dual-policy pattern.
+
+> **Added from review:** At `cache_interceptor.dart:51-53`, the cache policy is:
+> ```dart
+> policy: config.staleWhileRevalidate ? CachePolicy.request : CachePolicy.request,
+> ```
+> This is a ternary that returns the same value in both branches — effectively dead code. SWR is *entirely* custom logic, not delegated to `dio_cache_interceptor`. The C# port should implement SWR as a custom layer on top of whatever cache library is chosen.
+
 ### 3.2 ETag and If-None-Match (Conditional Requests)
 
 **Source**: `test/interceptors/etag_cache_test.dart`
@@ -197,6 +221,13 @@ The interceptor adds metadata to responses to indicate cache behavior:
 | `acdc_source` | `response.extra` | `"network"`, `"cache"`, `"cache_stale"`, `"network_fresh"` | Source of the response |
 | `fromOfflineCache` | `response.extra` | `true` | Response served from stale cache during offline |
 | `from_cache` | `response.extra` | `true` | General cache hit indicator |
+
+> **Added from review:** The logic in `_proceedWithResponse()` (`cache_interceptor.dart:325-378`) determines `acdc_source` values:
+> - If `from_cache` or `extraCacheKey` is present → `acdc_source = 'cache'`
+> - If `swr_refresh` was true → `acdc_source = 'network_fresh'`
+> - Otherwise → `acdc_source = 'network'`
+
+> **Added from review:** The `_CacheAwareRequestHandler` (`cache_interceptor.dart:483-539`) intercepts cache hits from `dio_cache_interceptor.onRequest()` and marks them with `from_cache = true`, `acdc_source = 'cache'`, `X-ACDC-From-Cache: true`, and logs cache misses/hits. This is relevant for the C# port as a `DelegatingHandler` that decorates responses with provenance metadata.
 
 ---
 
@@ -305,6 +336,8 @@ The user ID is propagated via:
 
 Wraps a `FileCacheStore` (from `http_cache_file_store`) and encrypts all cached response content using AES-256-GCM.
 
+> **Added from review:** The `EncryptedCacheStore.maxSize` is **not enforced** (`encrypted_cache_store.dart:53` comment: "Maximum cache size (not strictly enforced by FileCacheStore wrapper currently)"). The store accepts `maxSize` but does not implement size-based eviction. The C# port should be aware of this gap.
+
 #### Encryption Details
 
 | Parameter | Value |
@@ -376,6 +409,8 @@ if (version != null && storedVersion != version) {
 
 The store uses lazy initialization (`_ensureInitialized()`) to defer directory creation, key generation, and version checking until first use.
 
+> **Added from review:** The lazy initialization pattern using `_initFuture` (`encrypted_cache_store.dart:76-84`) is safe in Dart's single-threaded async model but would have a race condition in C#. The C# port should use `Lazy<Task>` or `SemaphoreSlim` for thread-safe lazy initialization.
+
 ---
 
 ## 6. Offline Support / Stale-While-Revalidate Patterns
@@ -415,6 +450,8 @@ Key behaviors:
 - Allows stale content when offline (sets `statusCode = 200` even for expired cache).
 - Adds `fromOfflineCache=true` and `X-ACDC-From-Cache: true` metadata.
 - `forceNetwork` flag in `RequestOptions.extra` bypasses offline checks entirely.
+
+> **Added from review:** The OfflineInterceptor catches `Object` (not just `Exception`) at `offline_interceptor.dart:121`. The C# equivalent should catch `Exception` (which in .NET already covers all catchable exceptions).
 
 ```dart
 // offline_interceptor.dart:88-125
@@ -477,6 +514,15 @@ if (_config.staleWhileRevalidate && options.method.toUpperCase() == 'GET'
 }
 ```
 
+> **Added from review:** The SWR code includes a `swr_callback` mechanism (`cache_interceptor.dart:234-239`) that allows callers to capture the background refresh `Future`:
+> ```dart
+> final swrCallback = options.extra['swr_callback'] as void Function(Future<dynamic>)?;
+> if (swrCallback != null) {
+>   swrCallback(refreshFuture);
+> }
+> ```
+> This is used in testing and for the `streamRequest()` extension. The C# equivalent could return a `Task` or use an event/callback.
+
 ### 6.3 Stale-If-Error
 
 When `staleIfError: true` (default), the `_CacheAwareErrorHandler` detects when `dio_cache_interceptor` serves stale cache during network errors and adds offline metadata:
@@ -492,6 +538,8 @@ void resolve(Response<dynamic> response) {
   originalHandler.resolve(response);
 }
 ```
+
+> **Added from review:** The `_CacheAwareErrorHandler.next()` method (`cache_interceptor.dart:555-572`) detects network errors (connection timeout, send timeout, receive timeout, connection error) and enhances them into `AcdcNetworkException.fromDioException()`. The cache interceptor itself produces typed network exceptions when `dio_cache_interceptor` cannot serve from cache during errors.
 
 ---
 
@@ -528,6 +576,8 @@ await dio.cache.clearCache();
 // Clear cache for a specific URL
 await dio.cache.clearCacheForUrl('https://api.example.com/users');
 ```
+
+> **Review correction:** `clearCacheForUrl()` uses `defaultCacheKeyBuilder` **without user isolation** (`cache_interceptor.dart:458-463`). It only clears the shared cache key for a URL. User-isolated entries (`baseKey:user123`, `baseKey:user456`) are NOT cleared. This is a potential bug or surprising API behavior. The C# port should consider whether `clearCacheForUrl()` should clear all user variants (requiring pattern-based deletion) or just the shared key.
 
 ### 7.4 TTL/Stale Expiration
 
@@ -611,6 +661,8 @@ The Dart-ACDC caching system is designed for a **mobile/client** context. For a 
 | `jwt_decoder` | `System.IdentityModel.Tokens.Jwt` / `JwtSecurityTokenHandler` | Or simply `HttpContext.User.FindFirst(ClaimTypes.NameIdentifier)` on server |
 | `path_provider` | `Environment.GetFolderPath()` or `IHostEnvironment.ContentRootPath` | |
 
+> **Added from review:** `NetworkInfo` implementation details: uses `connectivity_plus`, defaults to `isConnected = true` on startup, uses `StreamController.broadcast()` for status change events, checks `List<ConnectivityResult>` where any non-`none` result means connected. On C# server-side, this concept doesn't apply.
+
 ### 10.3 Recommended C# Architecture
 
 #### For ASP.NET Core Server (Primary Target)
@@ -653,6 +705,19 @@ services.AddFusionCache()
     );
 ```
 
+> **Added from review:** FusionCache guidance gaps:
+> - Use `FactorySoftTimeout` to control when to start serving stale while the factory continues in background (real SWR equivalent).
+> - For multi-instance deployments, FusionCache supports **backplane** via Redis for cache invalidation propagation.
+> - `IMemoryCache`'s `SizeLimit` requires each entry to declare its size via `SetSize()`. FusionCache handles this automatically.
+
+> **Added from review:** The cache `DelegatingHandler` should integrate with `IHttpClientFactory`:
+> ```csharp
+> services.AddHttpClient("CachedClient")
+>     .AddHttpMessageHandler<CachingHandler>();
+> ```
+
+> **Added from review:** The Dart ACDC is a *client-side* library (wrapping outgoing HTTP calls), so the direct C# equivalent is `DelegatingHandler` in the `HttpClient` pipeline, NOT ASP.NET Core middleware (which handles incoming HTTP requests).
+
 #### For .NET MAUI Client (If Applicable)
 
 If porting to a .NET mobile client, the architecture maps more directly:
@@ -694,6 +759,8 @@ public class EncryptedCacheStore : ICacheStore
 }
 ```
 
+> **Added from review:** For .NET MAUI client scenarios, `SecureStorage` from `Microsoft.Maui.Storage` is the direct equivalent of `FlutterSecureStorage`.
+
 ### 10.4 Cache Key Generation in C#
 
 ```csharp
@@ -718,11 +785,17 @@ public static class CacheKeyBuilder
 }
 ```
 
+> **Review correction:** The C# `CacheKeyBuilder.Build()` example uses only `request.Method` and `request.RequestUri`, but the Dart `defaultCacheKeyBuilder` also considers headers and body in the key. The C# example is simplified — for full parity, headers should be included in the key.
+
 ### 10.5 Key Porting Decisions
 
 1. **Skip EncryptedCacheStore for server**: Server storage is trusted. Use Redis with TLS for network encryption if needed.
 
+> **Added from review:** Both `TwoTierCacheStore` and `EncryptedCacheStore` implement `pathExists()` as a synchronous URL-matching utility (regex-based, with optional query parameter validation), not an actual cache lookup. This is worth noting for the C# port.
+
 2. **Replace OfflineInterceptor**: Server-side has no offline concept. Instead, implement circuit-breaker patterns (Polly) for downstream service calls.
+
+> **Added from review:** Polly v8+ (via `Microsoft.Extensions.Http.Resilience`) integrates directly with `IHttpClientFactory` and provides circuit breaker (replacing offline detection), retry with exponential backoff, and timeout handling — all relevant to replacing both `OfflineInterceptor` and the network error handling in `_CacheAwareErrorHandler`.
 
 3. **Cache invalidation on mutations**: Implement as ASP.NET Core middleware or action filter that clears related cache keys after POST/PUT/DELETE.
 

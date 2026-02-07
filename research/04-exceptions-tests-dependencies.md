@@ -35,6 +35,8 @@ DioException (from dio package)
             +-- AcdcSecurityException   (certificate pinning failures)
 ```
 
+> **Review correction:** `AcdcSecurityException` is listed in the hierarchy and described in the document, but it is **not exported** from the public barrel file (`lib/dart_acdc.dart`). The `public_api_test.dart` does NOT check for it in the "All exception types are exported" test. This is either a bug in the Dart library or a deliberate choice that the C# port must address — should `AcdcSecurityException` be part of the public API?
+
 ### 1.2 Supporting Enums
 
 ```
@@ -95,6 +97,16 @@ static String redactUrl(String url) { ... }
 
 **Equality**: Implemented via `operator ==` and `hashCode` using `runtimeType`, `message`, `statusCode`, `requestUrl`, and `responseData.toString()`. This ensures type-safe equality (an `AcdcException` != `AcdcAuthException` even with same message) and handles complex responseData objects by using toString comparison.
 
+> **Added from review:** `AcdcException` defaults `super.type` to `DioExceptionType.unknown` (`acdc_exception.dart:25`). Each subclass overrides this differently:
+> - `AcdcAuthException` → `DioExceptionType.badResponse`
+> - `AcdcClientException` → `DioExceptionType.badResponse`
+> - `AcdcServerException` → `DioExceptionType.badResponse`
+> - `AcdcNetworkException` → preserves `originalException.type`
+> - `AcdcCacheException` → `DioExceptionType.unknown`
+> - `AcdcSecurityException` → inherits default `DioExceptionType.unknown`
+>
+> This mapping is porting-relevant: the C# equivalent needs to decide how to represent the error type/category.
+
 ### 1.4 Specialized Exception Classes
 
 #### AcdcAuthException (401/403)
@@ -107,6 +119,8 @@ static String redactUrl(String url) { ... }
   - 401: "Authentication failed: Invalid or expired token"
   - 403: "Authorization failed: Insufficient permissions"
   - Other: "Authentication error (HTTP {code})"
+
+> **Added from review:** `AcdcAuthException` also handles HTTP 403 (Forbidden) with the message "Authorization failed: Insufficient permissions". The `_defaultMessage` method generates different messages for 401 vs 403 vs other codes.
 
 ```dart
 factory AcdcAuthException.fromDioException(
@@ -140,6 +154,8 @@ static Duration? _parseRetryAfter(Headers? headers) {
 }
 ```
 
+> **Added from review:** The initial `Retry-After` extraction from `Headers` uses `headers['retry-after']` which returns a `List<String>?` (Dio stores headers as lists), then takes `.first`. In C#, `HttpResponseMessage.Headers.RetryAfter` provides a strongly-typed `RetryConditionHeaderValue` with `Delta` (TimeSpan) and `Date` (DateTimeOffset) properties — this is simpler than manual parsing.
+
 #### AcdcServerException (5xx)
 
 **Source**: `lib/src/exceptions/acdc_server_exception.dart`
@@ -167,6 +183,8 @@ connectionError   -> NetworkErrorType.noConnection
 default           -> NetworkErrorType.other
 ```
 
+> **Added from review:** `AcdcNetworkException` passes `type: originalException.type` to the `super` constructor (`acdc_network_exception.dart:42`), preserving the original Dio exception type. This is different from other subclasses that hardcode their type to `DioExceptionType.badResponse`.
+
 #### AcdcCacheException (cache operations)
 
 **Source**: `lib/src/exceptions/acdc_cache_exception.dart`
@@ -179,6 +197,8 @@ default           -> NetworkErrorType.other
   - `AcdcCacheException.writeFailed()`
   - `AcdcCacheException.clearFailed()`
 - These create synthetic `DioException` wrappers since cache errors may not originate from Dio
+
+> **Added from review:** The `originalException` parameter in `AcdcCacheException` is declared as `required super.originalException` (`acdc_cache_exception.dart:30`), making it non-nullable — unlike the base `AcdcException` where it is optional. The factory constructors create synthetic `DioException` wrappers to satisfy this requirement, even when the original error was not HTTP-related. In C#, this artificial wrapping can be avoided since the base exception need not extend `HttpRequestException` for cache errors.
 
 #### AcdcSecurityException (certificate pinning)
 
@@ -203,6 +223,12 @@ String toString() {
   // ...
 }
 ```
+
+> **Added from review:** `AcdcSecurityException` does NOT have a `fromDioException()` factory — it is only created directly in `PinningVerifier.verify()` (`pinning_verifier.dart:73-79`). The `ErrorInterceptor` does NOT convert `DioExceptionType.badCertificate` to `AcdcSecurityException`. This means the security exception has a completely different throw path from all other exceptions. In C#, it should be handled in the certificate validation callback, not in the `DelegatingHandler` error pipeline.
+
+> **Added from review:** `AcdcSecurityException` declares `originalException` as optional (without `required` keyword, at `acdc_security_exception.dart:11`), unlike other subclasses. The C# equivalent should similarly not require an inner `HttpRequestException`.
+
+> **Added from review:** There is NO dedicated test file for `AcdcSecurityException` in `test/exceptions/`. It is only tested indirectly via `pinning_verifier_test.dart`, `pinning_http_client_test.dart`, and `certificate_pinning_integration_test.dart`.
 
 ---
 
@@ -248,6 +274,8 @@ try {
 
 Every exception provides `toMap()` for machine-readable logging. Subclasses extend the base map with their specific fields (e.g., `networkErrorType`, `retryAfter`, `cacheOperation`).
 
+> **Review correction:** `AcdcServerException` and `AcdcAuthException` do NOT override `toMap()`. They inherit the base implementation, so their maps do NOT include any subclass-specific data. Only `AcdcClientException` (adds `retryAfter`), `AcdcNetworkException` (adds `networkErrorType`), and `AcdcCacheException` (adds `cacheOperation`) have `toMap()` overrides.
+
 ### 2.5 Factory Constructor Pattern
 
 Most subclasses provide `fromDioException()` factory constructors that:
@@ -258,6 +286,16 @@ Most subclasses provide `fromDioException()` factory constructors that:
 5. Construct the typed exception
 
 This keeps the ErrorInterceptor clean -- it just calls the appropriate factory.
+
+> **Added from review:** The `ErrorInterceptor` (`lib/src/interceptors/error_interceptor.dart`) is the central component that creates typed exceptions, but is not described in this document. Key behaviors:
+> 1. Checks network errors first (lines 35-36) before HTTP status codes
+> 2. Handles malformed responses as `AcdcClientException` ("Invalid response format from server") — detects `FormatException` or strings containing "format", "parse", "invalid json" (lines 103-113)
+> 3. Handles 3xx redirects as `AcdcClientException` when redirects are disabled (lines 48-49)
+> 4. Detects hidden network errors via string matching on `DioExceptionType.unknown` errors — patterns: `socketexception`, `failed host lookup`, `network is unreachable`, `software caused connection abort`, `connection refused`, `connection reset` (lines 86-97). This is **fragile** and relies on platform-specific strings.
+> 5. Does NOT handle `DioExceptionType.badCertificate` — certificate errors fall through and are NOT converted to `AcdcSecurityException`
+> 6. Falls through to return original `DioException` for unrecognized cases
+>
+> For C#, the equivalent `DelegatingHandler` should catch `HttpRequestException` (network errors) and `TaskCanceledException` (timeouts/cancellation) instead of string matching. .NET 8 added `HttpRequestError` enum for structured error classification.
 
 ---
 
@@ -289,6 +327,8 @@ test/
   public_api_test.dart                  # Verifies all public types are exported
   enforce_export_policy_test.dart       # Filesystem-level export enforcement
 ```
+
+> **Added from review:** Missing from the test listing: `test/interceptors/error_interceptor_test.dart` (274 lines) — comprehensive test file covering all status code mappings (401, 403, 4xx, 5xx), all network error types, and edge cases (malformed responses, 3xx redirects, non-standard status codes like 418, 451, 599).
 
 ### 3.2 Testing Frameworks Used
 
@@ -352,6 +392,8 @@ test('toMap includes cacheOperation', () {
   expect(map['cacheOperation'], 'read');
 });
 ```
+
+> **Added from review:** The `AcdcLogDelegate` interface defines `metadata` as a **required** non-nullable `Map<String, dynamic>`, but the example file (`example/example.dart:159-162`) uses an **optional positional** parameter with `?`. This compiles in Dart but could confuse C# port developers. The C# interface should use a required parameter.
 
 ### 3.4 Integration Test Patterns
 
@@ -550,6 +592,9 @@ The barrel file exports:
 | Auth | `AcdcAuthManager`, `AcdcAuth`, `SecureTokenProvider`, `TokenProvider`, `TokenRefreshResult` |
 | Cache | `AcdcCacheManager`, `AcdcCache`, `CacheConfig` |
 | Exceptions | `AcdcException`, `AcdcAuthException`, `AcdcClientException`, `AcdcServerException`, `AcdcNetworkException`, `AcdcCacheException`, `CacheOperation`, `NetworkErrorType` |
+
+> **Review correction:** The Public API table should include `CacheOperation` and `NetworkErrorType` in the Exceptions row (they are exported from the barrel file). Also note that `AcdcSecurityException` is NOT in the barrel file exports despite being in the exception hierarchy — it is effectively an internal type.
+
 | Logging | `AcdcLogDelegate`, `LogLevel` |
 | Network | `NetworkInfo`, `NetworkStatus` |
 | Security | `CertificatePinningConfig` |
@@ -574,6 +619,10 @@ The barrel file exports:
 | `pretty_dio_logger` | ^1.3.1 | HTTP request/response logging | `Serilog` / `Microsoft.Extensions.Logging` | Use `ILogger<T>` with structured logging. DelegatingHandler for HTTP logging. |
 | `meta` | ^1.17.0 | Annotations (@immutable, etc.) | Built-in C# attributes | `[Immutable]` (custom), `readonly struct`, etc. |
 | `flutter` (SDK) | >=3.38.0 | Flutter framework | **Not applicable** | C# port is server-side / library only. |
+
+> **Added from review:** The handler ordering in the C# `IHttpClientFactory` example should match the interceptor chain order: Logging → Error → Cancellation → Auth → Cache → Custom → Deduplication (not the arbitrary order shown in the document).
+
+> **Review correction:** The barrel file's doc comment says `Dart SDK: >=3.0.0` and `Flutter: >=3.10.0`, but `pubspec.yaml` says `sdk: ">=3.6.0 <4.0.0"` and `flutter: ">=3.38.0"`. The `pubspec.yaml` is the source of truth. The C# port should specify its .NET version requirement clearly.
 
 ### 5.2 Dev Dependencies
 
@@ -632,6 +681,8 @@ var server = WireMockServer.Start();
 server.Given(Request.Create().WithPath("/token").UsingPost())
     .RespondWith(Response.Create().WithStatusCode(200).WithBody("..."));
 ```
+
+> **Added from review:** There are two separate `FakeApiServer` classes defined inline in different test files (`complete_client_integration_test.dart:372-439` and `app_lifecycle_test.dart:434-495`). These are NOT shared via `test/helpers/`. The C# port should consolidate test infrastructure to avoid duplication.
 
 ---
 
@@ -717,6 +768,15 @@ try {
     var message = e.Message;
 }
 ```
+
+> **Added from review:** The `public_api_test.dart` verifies the default timeout is 5 seconds (`public_api_test.dart:126-129`):
+> ```dart
+> const defaultTimeout = Duration(seconds: 5);
+> expect(dio.options.connectTimeout, defaultTimeout);
+> expect(dio.options.receiveTimeout, defaultTimeout);
+> expect(dio.options.sendTimeout, defaultTimeout);
+> ```
+> This default should be captured for the C# port to maintain behavioral parity.
 
 ---
 
@@ -821,6 +881,10 @@ public enum CacheOperation
 - `HttpRequestException` is somewhat HTTP-specific; cache and security exceptions are not HTTP errors
 - `HttpRequestException.StatusCode` is `HttpStatusCode?` (enum), Dart uses `int?`
 
+> **Added from review:** `HttpRequestException.StatusCode` was only added in .NET 5.0. The document should specify minimum .NET version. Also, `HttpRequestException` does not have a built-in `InnerException` typed as `HttpRequestException` — `OriginalException` would need to be a separate property.
+
+> **Added from review:** For `AcdcCacheException`, extending `HttpRequestException` creates a semantic problem: a cache read failure is not an HTTP request exception. Consider having `AcdcCacheException` extend `AcdcException` which extends `Exception` (not `HttpRequestException`), breaking with the Dart pattern where this was forced by `DioException` inheritance. This supports Option B or a hybrid approach for non-HTTP exceptions.
+
 ### 8.2 Option B: Custom Base Exception
 
 ```csharp
@@ -843,6 +907,8 @@ public class AcdcException : Exception
 
 For `AcdcCacheException` and `AcdcSecurityException`, which are not HTTP-response errors, consider still extending `AcdcException` (which extends `HttpRequestException`) for hierarchy consistency, even though the `StatusCode` will be null. This mirrors the Dart approach where `AcdcCacheException` extends `AcdcException` which extends `DioException`.
 
+> **Added from review:** C# exception equality considerations: Exceptions typically do NOT override `Equals()` / `GetHashCode()`. The Dart approach of using `responseData.toString()` for equality is fragile. For C#, consider whether equality is needed (primarily useful for testing). If needed, implement `IEquatable<AcdcException>` rather than overriding `object.Equals()`.
+
 ### 8.4 C# Test Strategy Recommendations
 
 | Dart Pattern | C# Equivalent |
@@ -856,6 +922,12 @@ For `AcdcCacheException` and `AcdcSecurityException`, which are not HTTP-respons
 | Public API test (type existence checks) | Assembly reflection test scanning exported types |
 | Export policy test (filesystem check) | InternalsVisibleTo + API analyzer |
 | `expectLater(expr, throwsA(isA<T>()))` | `await Assert.ThrowsAsync<T>(() => expr)` |
+
+> **Added from review:** For structured logging, the C# port should use the standard `ILogger<T>` interface rather than a custom delegate. The `toMap()` method maps well to structured logging:
+> ```csharp
+> logger.LogError("ACDC exception: {ExceptionType} {StatusCode}",
+>     exception.GetType().Name, exception.StatusCode);
+> ```
 
 ### 8.5 C# Public API Enforcement
 

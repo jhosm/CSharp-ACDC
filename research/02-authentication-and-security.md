@@ -55,6 +55,12 @@ lib/src/security/                # Transport-level security
 - Dual refresh: proactive (before expiry) + reactive (on 401)
 - Best-effort error handling (auth failures degrade gracefully)
 
+> **Added from review:** `AcdcAuthException` handles both 401 and 403, with different default messages:
+> - 401: "Authentication failed: Invalid or expired token"
+> - 403: "Authorization failed: Insufficient permissions"
+>
+> All exceptions apply URL redaction via `AcdcException.redactUrl()` and response body truncation via `AcdcException.truncateResponseBody()`.
+
 ---
 
 ## 2. Token Provider Abstraction
@@ -81,6 +87,9 @@ abstract class TokenProvider {
 - All methods are `async` (Future-based) to support platform-specific storage that may be I/O-bound
 - Expiry is stored separately, not parsed from JWT -- enables both JWT and opaque tokens
 - `setTokens` uses optional parameters for partial updates (e.g., rotation may only update refresh token)
+
+> **Review correction:** `accessToken` is **always** written (it is a required parameter). Only `refreshToken`, `accessExpiry`, and `refreshExpiry` are conditional on being non-null. When `refreshToken` is null, the **old refresh token is preserved** in storage. However, different test `TokenProvider` implementations handle this inconsistently -- `TestTokenProvider` in `logout_during_refresh_test.dart` always overwrites `_refreshToken` (even with null), while `oauth_21_compliance_test.dart` correctly preserves old refresh tokens when null. The C# port must define this contract clearly.
+
 - Provider stores tokens without validating expiry -- expiry validation is the interceptor's responsibility
 
 ### Secure Implementation (`secure_token_provider.dart`)
@@ -118,6 +127,8 @@ Future<void> setTokens({...}) async {
   ]);
 }
 ```
+
+> **Added from review:** The builder defaults to creating a `SecureTokenProvider()` when no `TokenProvider` is explicitly configured (`acdc_client_builder.dart:540`): `final tokenProvider = _tokenProvider ?? const SecureTokenProvider();`. This means auth is always active by default unless `disableAuth()` is called. The C# server-side port needs to decide if this default-on behavior is appropriate -- a server-side default might be `InMemoryTokenProvider` or requiring explicit configuration.
 
 ---
 
@@ -190,6 +201,8 @@ if (expiresIn != null) {
 }
 ```
 
+> **Review correction:** The clock skew code uses `DateTime.parse(dateHeader)` which parses **ISO 8601 format**, NOT RFC 1123. Standard HTTP `Date` headers use RFC 1123 format (e.g., `"Tue, 07 Feb 2026 12:00:00 GMT"`), and `DateTime.parse()` will fail to parse them, always falling back to local time. This is confirmed by `test/helpers/fake_oauth_server.dart:172` which sends the Date header in `HttpDate.format()` (RFC 1123). The tests pass because the `FormatException` is silently caught. **This is a bug in the Dart source.** The C# port should use `DateTimeOffset.ParseExact` with `"R"` format (RFC 1123) for the server Date header.
+
 **OAuth error mapping:** Maps standard OAuth error codes to user-friendly messages:
 
 | OAuth Error Code | Mapped Message |
@@ -250,6 +263,14 @@ AuthInterceptor({
   AcdcLogDelegate? logDelegate,
 });
 ```
+
+> **Added from review:** The `AuthInterceptor` validates that `refreshThreshold` must be positive (`auth_interceptor.dart:57-59`):
+> ```dart
+> if (refreshThreshold.inSeconds <= 0) {
+>     throw ArgumentError('refreshThreshold must be positive');
+> }
+> ```
+> This validation should be ported to C#.
 
 Strategy resolution priority:
 1. `refreshStrategy` (direct injection)
@@ -344,6 +365,8 @@ _retryClient ??= Dio();
 final response = await _retryClient!.fetch<dynamic>(requestOptions);
 handler.resolve(response);
 ```
+
+> **Added from review:** When a non-DioException occurs during retry (`auth_interceptor.dart:224-230`), the **original** error `err` is passed through rather than the new exception. This means the original 401 response is returned to the caller, masking the actual refresh failure. The C# port should consider whether to preserve or change this behavior.
 
 ---
 
@@ -505,6 +528,15 @@ extension AcdcAuth on Dio {
 }
 ```
 
+### `refreshNow()` Method
+
+> **Added from review:** The `refreshNow()` method works by creating a **synthetic request** and pushing it through `_authInterceptor.onRequest()` (`acdc_auth_manager.dart:167-178`):
+> ```dart
+> final options = RequestOptions(path: '/refresh-trigger');
+> await _authInterceptor.onRequest(options, RequestInterceptorHandler());
+> ```
+> This is a clever but fragile approach -- it depends on the interceptor's proactive refresh logic, which only triggers if the token is near expiry. If the token is NOT near expiry, `refreshNow()` will just inject the existing token without actually refreshing. The C# port should handle this differently with a dedicated `ForceRefresh()` method on the handler.
+
 ### Logout Flow
 
 ```dart
@@ -532,6 +564,8 @@ Future<void> logout() async {
 }
 ```
 
+> **Added from review:** The `logout()` ordering is intentional: `_clearCache()` is called **before** `_revokeTokens()` and `clearTokens()` because cache clearing may need the current user ID (derived from the access token). If tokens were cleared first, the cache manager wouldn't know which user's cache to clear (`acdc_auth_manager.dart:122`).
+
 **Best-effort revocation:** Revocation failures are logged but do NOT prevent logout from completing:
 
 ```dart
@@ -549,7 +583,20 @@ Future<void> _revokeToken(String revocationUrl, String clientId, String token, S
 }
 ```
 
+> **Review correction:** The revocation request also includes an `Accept: application/json` header (`acdc_auth_manager.dart:253-256`):
+> ```dart
+> options: Options(
+>     contentType: 'application/x-www-form-urlencoded',
+>     headers: {'Accept': 'application/json'},
+> ),
+> ```
+> This was omitted from the document snippet.
+
 **Revocation order:** Refresh token first (higher priority since it can generate new access tokens), then access token.
+
+> **Added from review:** `_revokeTokens()` retrieves both `refreshToken` and `accessToken` from the provider **before** any revocation begins (`acdc_auth_manager.dart:203-213`). If `getRefreshToken()` succeeds but `getAccessToken()` throws, the entire revocation is skipped. The C# port could improve on this by fetching them independently.
+
+> **Added from review:** `_initializeUserTracking()` is called in the constructor as fire-and-forget (`acdc_auth_manager.dart:38-40, 63-66`). The `_currentUserId` may not be set by the time the first request completes. This is intentional ("best-effort") but matters for C# thread safety.
 
 ### Cancel Refresh During Logout
 
@@ -638,6 +685,20 @@ class PinningVerifier {
 }
 ```
 
+> **Review correction:** The actual verification source (`pinning_verifier.dart:55-69`) wraps the SPKI extraction in try/catch and collects hashes:
+> ```dart
+> for (final cert in chain) {
+>     try {
+>         final hash = spkiExtractor(cert);
+>         peerSpkiHashes.add(hash);
+>         if (matchedPins.contains(hash)) return;
+>     } on Object {
+>         continue;  // Skip certs that fail extraction
+>     }
+> }
+> ```
+> The `peerSpkiHashes` list is populated during iteration and passed to the failure callback/exception. The document's pseudocode omits both the error handling and hash collection.
+
 **Wildcard matching:** `*.example.com` matches `api.example.com` but NOT `example.com` or `deep.api.example.com`:
 
 ```dart
@@ -713,6 +774,8 @@ class PinningHttpClient implements HttpClient {
 
 **Key limitation:** `badCertificateCallback` only provides the leaf certificate, not the full chain. The verifier receives a single-element list. This is typically sufficient for leaf pinning.
 
+> **Added from review:** The builder creates an `HttpClient` with an **empty `SecurityContext()`** (`acdc_client_builder.dart:509-524`), which bypasses the OS trust store entirely. This forces ALL certificates through the `badCertificateCallback` (since they're all "untrusted"). Combined with the `PinningVerifier`, this means verification only happens for certificates the OS considers "bad". In C#, `ServerCertificateCustomValidationCallback` is **always called** regardless of certificate validity, which is a simpler and more reliable model -- no empty trust store workaround needed.
+
 **External callback override protection:** If external code tries to set `badCertificateCallback`, it is silently ignored with a warning log:
 
 ```dart
@@ -769,6 +832,10 @@ static String? extractUserId(String? token) {
   return null;
 }
 ```
+
+> **Added from review:** `UserIdExtractor._extractToken()` is case-insensitive for "Bearer" (`user_id_extractor.dart:88`): `if (trimmed.toLowerCase().startsWith('bearer '))`. This follows RFC 6750. The C# port should preserve this behavior.
+
+> **Added from review:** `JwtUtils` lives in `lib/src/cache/` not `lib/src/auth/` or `lib/src/security/`. This is because JWT user ID extraction is primarily used for cache key isolation. The C# port should consider correct namespace placement.
 
 ---
 
@@ -938,6 +1005,8 @@ var response = await httpClient.PostAsync(tokenEndpoint, content, ct);
 
 **Key consideration:** In C#, the `HttpClient` used for refresh MUST be a separate instance from the main client (or use `IHttpClientFactory`) to avoid the DelegatingHandler/interceptor loop -- same pattern as Dart's separate `Dio()` instance.
 
+> **Added from review:** For both the retry client and OAuth refresh client, the C# port should use `IHttpClientFactory` to avoid socket exhaustion. This should be a **firm recommendation**, not just an alternative.
+
 ### 11.3 Auth Interceptor -> DelegatingHandler
 
 **Dart:** `Interceptor` (Dio concept)
@@ -969,6 +1038,8 @@ public class AuthDelegatingHandler : DelegatingHandler
 ```
 
 **Proactive refresh in C#:** Can be done in `SendAsync` before calling `base.SendAsync`, checking `_tokenProvider.GetAccessTokenExpiryAsync()`.
+
+> **Added from review:** `DelegatingHandler` instances are typically managed by `IHttpClientFactory` and may be pooled/reused. The C# `AuthDelegatingHandler` should NOT hold its own `HttpClient` for retries -- it should request one from the factory.
 
 ### 11.4 Concurrency Handling -> SemaphoreSlim / TaskCompletionSource
 
@@ -1012,6 +1083,8 @@ private async Task RefreshTokenWithQueueAsync(CancellationToken ct)
 }
 ```
 
+> **Review correction:** The C# concurrent refresh code has a race condition: between checking `_refreshTcs != null` and calling `_refreshLock.WaitAsync()`, another thread could complete the refresh and set `_refreshTcs = null`. The correct pattern should check `_refreshTcs` **inside** the lock, or use `Lazy<Task>` / `AsyncLazy<T>` pattern.
+
 ### 11.5 Backoff Manager
 
 Direct port -- the `BackoffManager` is pure logic with no platform dependencies:
@@ -1045,6 +1118,8 @@ public class BackoffManager
     public void Reset() { _backoffSeconds = 0; _waitSatisfied = false; }
 }
 ```
+
+> **Added from review:** The Dart `BackoffManager` is NOT thread-safe (Dart is single-threaded). The C# port needs synchronization for `_backoffSeconds`, `_lastAttempt`, and `_waitSatisfied`. Options: `lock`, `Interlocked`, or immutable instances. Also, the C# `CancellationToken` in `WaitIfNeededAsync` is an improvement over the Dart source which has no cancellation support in backoff waits.
 
 ### 11.6 Certificate Pinning -> HttpClientHandler
 
@@ -1088,6 +1163,12 @@ static string ComputeSpkiHash(X509Certificate2 cert)
 }
 ```
 
+> **Review correction:** `cert.PublicKey.EncodedKeyValue.RawData` gives only the public key value bytes, NOT the full SubjectPublicKeyInfo (SPKI) structure. The SPKI includes the algorithm identifier + public key. To match the Dart behavior, the C# code needs:
+> ```csharp
+> var spkiBytes = cert.PublicKey.ExportSubjectPublicKeyInfo();
+> ```
+> The document's comment "No need for manual ASN.1 parsing" is only partially correct -- you don't need to parse DER manually, but you DO need the correct API.
+
 **Key differences from Dart:**
 - C# provides the full chain in the callback (not just leaf)
 - Can validate intermediate/root certificates too
@@ -1108,6 +1189,13 @@ static string ComputeSpkiHash(X509Certificate2 cert)
 | **Token Revocation** | Best-effort on logout | Token introspection or reference tokens |
 | **Key Rotation** | Pin rotation requires app update | Certificate rotation is server config |
 | **Proxy/Debug** | Debug bypass for Charles/Fiddler | Not applicable |
+
+> **Added from review:** The `AuthRequestHelper` uses string-based keys (`_acdc_retry_after_refresh`, `_acdc_auth_manager`) stored in `extras`/`options`. In C#, these should use typed keys via `HttpRequestMessage.Options` with `HttpRequestOptionsKey<T>`, not magic strings.
+
+> **Added from review:** The `dio.auth` extension pattern has no direct C# equivalent. Options for the C# port:
+> - Extension method on `HttpClient` reading from a `ConcurrentDictionary`
+> - Wrapper class (e.g., `AcdcHttpClient`) exposing an `.Auth` property
+> - DI approach where `IAuthManager` is injected separately (recommended for server-side)
 
 ### 11.8 Files to Create in C# Port
 

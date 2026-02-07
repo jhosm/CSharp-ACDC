@@ -116,6 +116,8 @@ class AcdcClientBuilder {
 | **Security** | `withCertificatePinning()` | None |
 | **Custom** | `withInterceptor()` | None |
 
+> **Review correction:** The default large payload threshold is 1 MiB (1,048,576 bytes), not "1MB" (1,000,000 bytes). The builder's doc comment in the Dart source incorrectly says "100 KB" — the actual default from the interceptor constructor is 1,048,576 bytes.
+
 ### 3.3 `build()` Method -- Assembly Sequence
 
 The `build()` method is `async` (returns `Future<Dio>`) because it may need to write initial tokens. The assembly order:
@@ -170,6 +172,21 @@ public class AcdcClientBuilder
     }
 }
 ```
+
+> **Added from review:** The document recommends `IHttpClientFactory` but doesn't detail how ACDC's builder maps to .NET's `IServiceCollection.AddHttpClient()` fluent API:
+> ```csharp
+> services.AddHttpClient("acdc")
+>     .AddHttpMessageHandler<LoggingHandler>()
+>     .AddHttpMessageHandler<ErrorHandler>()
+>     .AddHttpMessageHandler<CancellationHandler>()
+>     .AddHttpMessageHandler<AuthHandler>()
+>     .AddHttpMessageHandler<CacheHandler>()
+>     .AddHttpMessageHandler<DeduplicationHandler>()
+>     .ConfigureHttpClient(client => {
+>         client.BaseAddress = new Uri(baseUrl);
+>         client.Timeout = TimeSpan.FromSeconds(5);
+>     });
+> ```
 
 ---
 
@@ -261,6 +278,8 @@ sequenceDiagram
     end
 ```
 
+> **Review correction:** The sequence diagram shows `ErrorInterceptor` actively participating in request and response phases (arrows like `Err->>Cancel` and `Err-->>Log`). In reality, `ErrorInterceptor` only overrides `onError` — it does NOT override `onRequest` or `onResponse` (`error_interceptor.dart:19-157`). Responses and requests flow through it transparently via Dio's default passthrough, but it does not actively process them. The diagram is technically correct for data flow but misleading about active participation.
+
 ### 4.2 Interceptor Details
 
 #### 4.2.1 LoggingInterceptor
@@ -277,6 +296,10 @@ sequenceDiagram
 - **Circular dependency prevention** -- Static `_isLogging` flag prevents log-within-log loops
 - **Request timing** -- Stores start time in `options.extra['acdc_request_start_time']`
 
+> **Added from review:** The `_isLogging` flag is **static** (`logging_interceptor.dart:79`), meaning it is shared across ALL `LoggingInterceptor` instances. If multiple Dio clients are used concurrently, logging from one could suppress logging from another. The C# port should use an `AsyncLocal<bool>` or per-instance flag instead.
+
+> **Added from review:** `printLogs` defaults to `false` (`logging_interceptor.dart:24`). By default, the LoggingInterceptor only outputs via the delegate, not to console.
+
 ```dart
 // Redaction logic
 bool _isSensitive(String key) {
@@ -287,6 +310,10 @@ bool _isSensitive(String key) {
   return false;
 }
 ```
+
+> **Added from review:** The full list of 16 default sensitive fields is: `password`, `token`, `secret`, `access_token`, `refresh_token`, `client_secret`, `authorization`, `apikey`, `api_key`, `accesstoken`, `refreshtoken`, `pin`, `ssn`, `creditcard`, `cvv`, `privatekey`, `private_key` (`logging_interceptor.dart:29-46`).
+
+> **Added from review:** The `_safeLog` method catches **all exceptions** using `on Object catch` (`logging_interceptor.dart:107`), which is more aggressive than typical Dart code that catches `on Exception`. The C# equivalent should use `catch (Exception)` which already catches all managed exceptions.
 
 **C# Porting:**
 - Use `DelegatingHandler` with `ILogger<LoggingHandler>`
@@ -335,6 +362,8 @@ bool _isNetworkError(DioException exception) {
 - Create a `DelegatingHandler` that catches these and wraps them in ACDC exception types
 - Use `HttpResponseMessage.StatusCode` for HTTP status classification
 - No need for string-based heuristics -- .NET provides typed exceptions
+
+> **Review correction:** The ErrorInterceptor only overrides `onError` — it does NOT participate in request or response phases. It is a pure error-phase interceptor. This simplifies the C# `DelegatingHandler` port: the error handler only needs a `try/catch` around `base.SendAsync()`, with no pre-request or post-response logic.
 
 #### 4.2.3 CancellationInterceptor
 
@@ -421,6 +450,23 @@ extension OfflineRequestOptions on RequestOptions {
 4. Attempt refresh via `_refreshTokenWithQueue()`
 5. Get new token, inject into original request, mark as retry, re-fetch
 
+> **Added from review:** The `_performTokenRefresh()` method differentiates error types (`auth_interceptor.dart:293-339`):
+> - `AcdcAuthException` → clears tokens (permanent failure)
+> - `AcdcNetworkException` → does NOT clear tokens (transient failure, allow retry later)
+> - `AcdcServerException` → applies exponential backoff increment (server issue)
+>
+> This distinction is **critical** for correct behavior. Clearing tokens on network errors would be a severe bug.
+
+> **Added from review:** The `AuthInterceptor` has a public `cancelRefresh()` method (`auth_interceptor.dart:402-409`) that cancels an in-progress refresh. This is used during logout and should be ported for C# shutdown/logout scenarios.
+
+> **Added from review:** Strategy resolution priority (`auth_interceptor.dart:62-74`):
+> 1. Explicit `refreshStrategy` parameter (highest priority)
+> 2. `refreshEndpointUrl` + `clientId` → `OAuthTokenRefreshStrategy`
+> 3. `customRefreshFn` → `CustomTokenRefreshStrategy`
+> 4. No strategy → token injection only, no refresh
+>
+> If both `refreshEndpointUrl` and `customRefreshFn` are provided, OAuth wins.
+
 **Concurrent Request Queuing:**
 ```dart
 Future<void> _refreshTokenWithQueue() async {
@@ -470,9 +516,38 @@ void increment({int maxSeconds = 30}) {
 - This is the most nuanced interceptor to port
 - Use `DelegatingHandler` with `SemaphoreSlim` for concurrent queue (instead of `Completer`)
 - Strategy pattern maps directly to C# interfaces
+
+> **Added from review:** The `_refreshQueueTimeout` default is 10 seconds (`auth_interceptor.dart:50`). This means queued requests waiting for a token refresh will timeout after 10 seconds, independent of the HTTP request timeout.
+
+> **Added from review:** The `unawaited(_refreshCompleter!.future.catchError((_) {}))` call at `auth_interceptor.dart:278` prevents unhandled exception warnings when the completer's future has an error but nobody is awaiting it. In C#, `TaskCompletionSource` faults are handled differently — the C# port should use `TrySetException` which does not throw if no one is awaiting.
+
+> **Added from review:** The retry client (`_retryClient`) is a **bare** `Dio()` instance with **no interceptors** (`auth_interceptor.dart:221-222`). This means retried requests bypass the entire interceptor chain — no logging, no error mapping, no caching, no offline detection. The C# retry `HttpClient` needs careful consideration: use `IHttpClientFactory` to request a separate client without the handler pipeline.
+
 - Consider using `Polly` for retry/backoff instead of custom `BackoffManager`
 - The retry mechanism (re-sending request after refresh) requires cloning the `HttpRequestMessage`
 - **Important:** `HttpRequestMessage` in .NET cannot be sent twice without cloning
+
+> **Added from review:** A concrete `HttpRequestMessage` cloning utility is needed for auth retry:
+> ```csharp
+> private static async Task<HttpRequestMessage> CloneRequest(HttpRequestMessage request)
+> {
+>     var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+>     if (request.Content != null)
+>     {
+>         var ms = new MemoryStream();
+>         await request.Content.CopyToAsync(ms);
+>         ms.Position = 0;
+>         clone.Content = new StreamContent(ms);
+>         foreach (var header in request.Content.Headers)
+>             clone.Content.Headers.TryAddWithoutValidation(header.Key, header.Value);
+>     }
+>     foreach (var header in request.Headers)
+>         clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+>     foreach (var prop in request.Options)
+>         clone.Options.TryAdd(prop.Key, prop.Value);
+>     return clone;
+> }
+> ```
 
 ```csharp
 // C# sketch for concurrent refresh queuing
@@ -501,6 +576,47 @@ private async Task RefreshTokenWithQueue()
 }
 ```
 
+> **Review correction:** The C# concurrent refresh queue sketch has a **race condition**: between checking `_activeRefresh != null` and awaiting it, another thread could set it to null. The correct pattern should use `SemaphoreSlim` to protect the check-and-set operation:
+> ```csharp
+> private readonly SemaphoreSlim _refreshLock = new(1, 1);
+> private TaskCompletionSource<bool>? _refreshTcs;
+>
+> private async Task RefreshTokenWithQueue(CancellationToken ct)
+> {
+>     TaskCompletionSource<bool>? existingTcs;
+>     await _refreshLock.WaitAsync(ct);
+>     try
+>     {
+>         if (_refreshTcs != null)
+>             existingTcs = _refreshTcs;
+>         else
+>         {
+>             _refreshTcs = new TaskCompletionSource<bool>();
+>             existingTcs = null;
+>         }
+>     }
+>     finally { _refreshLock.Release(); }
+>
+>     if (existingTcs != null)
+>     {
+>         await existingTcs.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+>         return;
+>     }
+>
+>     try
+>     {
+>         await PerformTokenRefresh(ct);
+>         _refreshTcs!.SetResult(true);
+>     }
+>     catch (Exception ex)
+>     {
+>         _refreshTcs!.SetException(ex);
+>         throw;
+>     }
+>     finally { _refreshTcs = null; }
+> }
+> ```
+
 #### 4.2.6 AcdcCacheInterceptor
 
 **File:** `lib/src/interceptors/cache_interceptor.dart`
@@ -514,6 +630,10 @@ private async Task RefreshTokenWithQueue()
 - Mutation invalidation -- POST/PUT/DELETE/PATCH clear related cache
 - Cache metadata -- `X-ACDC-From-Cache` header, `acdc_source` extra field
 - 304 Not Modified handling
+
+> **Added from review:** The constructor creates **two** `CacheOptions` objects: `_cacheOptions` (used for SWR cache lookups and key building) and a separate one passed to `_dioCacheInterceptor` (used for standard cache flow). This dual-instance pattern has implications for cache consistency (`cache_interceptor.dart:48-113`).
+
+> **Added from review:** The SWR refresh options include `'swr_refresh': true` to prevent infinite SWR loops (`cache_interceptor.dart:226`). The check at line 189 guards against this. This is an important detail for C# SWR implementation.
 
 **User Isolation Logic:**
 ```dart
@@ -623,6 +743,10 @@ extension AcdcClientExtensions on Dio {
 }
 ```
 
+> **Added from review:** `closeAcdc()` also calls `activeRequestTracker?.cancelAll()`, meaning closing the client cancels all in-flight requests, not just disposes resources. The C# `Dispose()` pattern should replicate this.
+
+> **Added from review:** The `streamRequest()` extension (`acdc_client_extensions.dart:44-94`) injects an `swr_callback` function into `options.extra`, which the `CacheInterceptor` calls to pass the background refresh future back. This callback-based communication would need equivalent implementation in C# (perhaps via `HttpRequestMessage.Options` containing an `Action<Task>`).
+
 ### 5.2 Communication via `Dio.options.extra`
 
 The builder stores managers in `dio.options.extra` (a `Map<String, dynamic>`), and extensions retrieve them using well-known keys:
@@ -666,6 +790,8 @@ public class AcdcHttpClient : IDisposable
 ```
 
 The wrapper approach is cleaner in C# than the `ConditionalWeakTable` approach and avoids the `options.extra` duck-typing pattern.
+
+> **Added from review:** In .NET 5+, `HttpRequestMessage.Options` is an `IDictionary<string, object?>` that can carry per-request metadata (like `_acdc_retry_after_refresh` or `acdc_request_start_time`). Use typed keys via `HttpRequestOptionsKey<T>` for type safety.
 
 ---
 
@@ -722,6 +848,8 @@ public class ActiveRequestTracker
     }
 }
 ```
+
+> **Added from review:** The `ActiveRequestTracker` also has an `isTracked(CancelToken token)` method (`active_request_tracker.dart:37`) used in tests and useful for C# diagnostics.
 
 ---
 
@@ -783,6 +911,8 @@ class NetworkInfoImpl implements NetworkInfo {
 }
 ```
 
+> **Added from review:** The implication of defaulting to online is that the very first request after app start will **never** be intercepted by OfflineInterceptor as offline, even if the device is actually offline, until the `connectivity_plus` check completes asynchronously. This is a race condition that exists by design ("best-effort").
+
 ### C# Porting
 
 | Platform | .NET Equivalent |
@@ -812,12 +942,14 @@ The library barrel file exports exactly these types:
 | **Builder** | `AcdcClientBuilder` |
 | **Auth** | `AcdcAuthManager`, `AcdcAuth`, `SecureTokenProvider`, `TokenProvider`, `TokenRefreshResult` |
 | **Cache** | `AcdcCacheManager`, `AcdcCache`, `CacheConfig` |
-| **Exceptions** | `AcdcException`, `AcdcAuthException`, `AcdcCacheException`, `AcdcClientException`, `AcdcNetworkException`, `AcdcServerException` |
+| **Exceptions** | `AcdcException`, `AcdcAuthException`, `AcdcCacheException`, `AcdcClientException`, `AcdcNetworkException`, `AcdcServerException`, `CacheOperation`, `NetworkErrorType` |
 | **Logging** | `AcdcLogDelegate`, `LogLevel` |
 | **Network** | `NetworkInfo`, `NetworkStatus` |
 | **Security** | `CertificatePinningConfig` |
 
 Everything else is internal (`src/`) and not accessible to consumers.
+
+> **Review correction:** The public API table was missing `CacheOperation` enum, which is exported alongside `AcdcCacheException` from `dart_acdc.dart:233-234`. Also note that `NetworkInfoImpl` is NOT exported (only `NetworkInfo` abstract class and `NetworkStatus` enum are public). The C# equivalent of `NetworkInfoImpl` should be `internal`.
 
 ---
 
@@ -835,6 +967,12 @@ Everything else is internal (`src/`) and not accessible to consumers.
 | **Extension Methods** | `dio.auth`, `dio.cache` | Dart extensions on `Dio` |
 | **Null Object** | Default `SecureTokenProvider` | Provided when no provider configured |
 | **Singleton-like** | `ActiveRequestTracker` per Dio instance | Stored in `options.extra` |
+
+> **Added from review:** The builder validates `_baseUrl` format but does NOT validate `_tokenRefreshEndpointUrl` or `_tokenRevocationEndpoint` (`acdc_client_builder.dart:476-486`). The C# builder may want stricter validation.
+
+> **Added from review:** When certificate pinning is configured, the builder hardcodes an idle timeout of 10 seconds (`acdc_client_builder.dart:514-515`). This is not configurable.
+
+> **Added from review:** The `_offlineFailFast` defaults to `true` (`acdc_client_builder.dart:94`), meaning offline errors will immediately throw rather than attempt the request.
 
 ---
 
@@ -877,6 +1015,8 @@ Everything else is internal (`src/`) and not accessible to consumers.
 | `connectivity_plus` | `IConnectivity` (MAUI) or `NetworkChange` (.NET) |
 | `dio_cache_interceptor` | Custom cache handler with `IMemoryCache` / `IDistributedCache` |
 | `flutter_secure_storage` | `SecureStorage` (MAUI) or `IDataProtectionProvider` (.NET) |
+
+> **Added from review:** The C# `DelegatingHandler` pipeline differs from Dio's interceptor list in an important way. In Dio, request flows forward (index 0→N) and response flows backward (N→0). In C#, handlers are nested — the outermost handler executes first for requests AND sees responses last (wrapping the entire call). This means logging naturally sees both outgoing requests and incoming responses at the correct boundaries through the nesting of `await base.SendAsync()` calls.
 
 ---
 
