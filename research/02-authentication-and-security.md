@@ -55,6 +55,8 @@ lib/src/security/                # Transport-level security
 - Dual refresh: proactive (before expiry) + reactive (on 401)
 - Best-effort error handling (auth failures degrade gracefully)
 
+> **Server-only note:** `SecureTokenProvider` (backed by `FlutterSecureStorage` / Keychain / Keystore) is **not ported**. The C# server port uses an `ITokenProvider` interface with a default `InMemoryTokenProvider` implementation. For distributed scenarios, tokens can be stored in `IDistributedCache` (Redis). Hardware-backed secure storage is a mobile concern.
+
 > **Added from review:** `AcdcAuthException` handles both 401 and 403, with different default messages:
 > - 401: "Authentication failed: Invalid or expired token"
 > - 403: "Authorization failed: Insufficient permissions"
@@ -127,6 +129,13 @@ Future<void> setTokens({...}) async {
   ]);
 }
 ```
+
+> **Server-only note:** The `SecureTokenProvider` with `FlutterSecureStorage`, iOS Keychain `first_unlock` accessibility, and Android EncryptedSharedPreferences are all mobile-specific and **not ported**. The C# server port provides:
+> - `InMemoryTokenProvider` — default, suitable for single-instance servers
+> - `DistributedTokenProvider` — backed by `IDistributedCache` (Redis), for multi-instance deployments
+> - Custom implementations via `ITokenProvider` interface
+>
+> Token encryption at rest is handled by Redis TLS and infrastructure-level security, not application-level AES.
 
 > **Added from review:** The builder defaults to creating a `SecureTokenProvider()` when no `TokenProvider` is explicitly configured (`acdc_client_builder.dart:540`): `final tokenProvider = _tokenProvider ?? const SecureTokenProvider();`. This means auth is always active by default unless `disableAuth()` is called. The C# server-side port needs to decide if this default-on behavior is appropriate -- a server-side default might be `InMemoryTokenProvider` or requiring explicit configuration.
 
@@ -632,6 +641,8 @@ Future<void> _checkUserChangeAndClearCache() async {
 
 ## 8. Certificate Pinning
 
+> **Server-only note:** Certificate pinning is typically **not needed** on server-side. Server-to-server communication usually occurs over trusted internal networks, VPNs, or service meshes that handle TLS termination. If downstream API certificate validation is needed, use `HttpClientHandler.ServerCertificateCustomValidationCallback` directly. The full `PinningVerifier`, `PinningHttpClient`, and `SpkiUtil` classes are **not ported** unless explicitly required. This section is retained for reference.
+
 ### Configuration (`certificate_pinning_config.dart`)
 
 ```dart
@@ -833,6 +844,8 @@ static String? extractUserId(String? token) {
 }
 ```
 
+> **Server-only note:** On server-side, prefer `HttpContext.User.Claims` from ASP.NET Core authentication middleware over manual JWT parsing. The JWT is already validated and decoded by the auth middleware. Use `user.FindFirstValue(ClaimTypes.NameIdentifier)` or `user.FindFirstValue("sub")` to get the user ID. Manual JWT parsing via `JwtUtils` / `System.IdentityModel.Tokens.Jwt` is only needed for outgoing HTTP client calls where the server acts as a client to downstream APIs.
+
 > **Added from review:** `UserIdExtractor._extractToken()` is case-insensitive for "Bearer" (`user_id_extractor.dart:88`): `if (trimmed.toLowerCase().startsWith('bearer '))`. This follows RFC 6750. The C# port should preserve this behavior.
 
 > **Added from review:** `JwtUtils` lives in `lib/src/cache/` not `lib/src/auth/` or `lib/src/security/`. This is because JWT user ID extraction is primarily used for cache key isolation. The C# port should consider correct namespace placement.
@@ -950,6 +963,8 @@ static String? extractUserId(String? token) {
 | Desktop (WPF/WinUI) | `DPAPI` via `ProtectedData` class | User-scope or machine-scope encryption |
 | Desktop (cross-platform MAUI) | `SecureStorage` from MAUI Essentials | Maps to Keychain (macOS/iOS), Keystore (Android) |
 | Blazor WebAssembly | `ProtectedLocalStorage` | Browser-side encrypted storage |
+
+> **Server-only note:** Only the "Server-side (ASP.NET)" row applies. The Desktop, MAUI, and Blazor WebAssembly rows are excluded. The default `ITokenProvider` implementation should be `InMemoryTokenProvider` (thread-safe, using `ConcurrentDictionary` or `lock`). For multi-instance server deployments, provide a `DistributedTokenProvider` backed by `IDistributedCache` (Redis).
 
 **Interface mapping:**
 
@@ -1175,6 +1190,8 @@ static string ComputeSpkiHash(X509Certificate2 cert)
 - `SslPolicyErrors` gives standard validation result alongside pinning check
 - No need for manual ASN.1 parsing -- `X509Certificate2.PublicKey` provides direct access
 
+> **Server-only note:** Certificate pinning is generally handled at infrastructure level on servers (reverse proxy, service mesh, mutual TLS). The `CertificatePinningHandler` is **not ported** by default. If needed for specific downstream API calls, the `ServerCertificateCustomValidationCallback` approach shown above can be used as-is, but this is expected to be rare in server deployments.
+
 ### 11.7 Server-Side vs Mobile Security Model Differences
 
 | Aspect | Mobile (Dart) | Server-Side (C#) |
@@ -1189,6 +1206,13 @@ static string ComputeSpkiHash(X509Certificate2 cert)
 | **Token Revocation** | Best-effort on logout | Token introspection or reference tokens |
 | **Key Rotation** | Pin rotation requires app update | Certificate rotation is server config |
 | **Proxy/Debug** | Debug bypass for Charles/Fiddler | Not applicable |
+
+> **Server-only note:** Only the "Server-Side (C#)" column applies for this port. Key decisions:
+> - **Token storage**: In-memory or Redis — no hardware-backed storage
+> - **Refresh model**: Service-to-service calls may use client credentials grant (no refresh tokens needed). User-context calls use delegated tokens from the incoming request.
+> - **Concurrency**: High concurrency is the norm — all auth components must be thread-safe (`SemaphoreSlim`, `ConcurrentDictionary`, `Interlocked`)
+> - **Secret storage**: Client secrets in environment variables, Azure Key Vault, or `IConfiguration` with secret providers — never in code
+> - **User context**: Multi-tenant — use `HttpContext.User.Claims` for user identity, not JWT parsing
 
 > **Added from review:** The `AuthRequestHelper` uses string-based keys (`_acdc_retry_after_refresh`, `_acdc_auth_manager`) stored in `extras`/`options`. In C#, these should use typed keys via `HttpRequestMessage.Options` with `HttpRequestOptionsKey<T>`, not magic strings.
 
@@ -1223,6 +1247,13 @@ src/Security/
   UserIdExtractor.cs             # JWT user ID extraction
 ```
 
+> **Server-only note:** The following files from the listing are **not created** in the server port:
+> - `CertificatePinningConfig.cs` — not ported (infrastructure handles TLS)
+> - `CertificatePinningHandler.cs` — not ported
+> - `SpkiUtil.cs` — not ported (no manual SPKI extraction needed)
+>
+> The `UserIdExtractor.cs` should prefer `HttpContext.User.Claims` over JWT parsing. Only use JWT parsing for outgoing calls to downstream APIs where the token is forwarded.
+
 ### 11.9 External Dependencies Mapping
 
 | Dart Package | C# Equivalent | Notes |
@@ -1232,6 +1263,11 @@ src/Security/
 | `crypto` (SHA-256) | `System.Security.Cryptography.SHA256` | Built-in .NET |
 | `jwt_decoder` | `System.IdentityModel.Tokens.Jwt` | Microsoft NuGet package |
 | N/A | `IdentityModel` | Optional: OAuth token endpoint client |
+
+> **Server-only note:** The following Dart dependencies are **excluded** from the C# server port:
+> - `flutter_secure_storage` → Replaced by `InMemoryTokenProvider` or `IDistributedCache`
+> - `crypto` (SHA-256 for SPKI) → Not needed (no certificate pinning)
+> - `jwt_decoder` → Prefer `HttpContext.User.Claims`; only use `System.IdentityModel.Tokens.Jwt` for downstream API token forwarding
 
 ---
 

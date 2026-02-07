@@ -64,6 +64,8 @@ graph TD
     I8 -->|"Network"| Server["HTTP Server"]
 ```
 
+> **Server-only note:** The C# port removes `OfflineInterceptor` (item 4) and `NetworkInfo` from the architecture. Servers have stable connections — transient downstream failures are handled by Polly resilience policies via `Microsoft.Extensions.Http.Resilience`. The handler chain becomes 7 handlers instead of 8.
+
 ---
 
 ## 3. Builder Pattern -- `AcdcClientBuilder`
@@ -118,6 +120,8 @@ class AcdcClientBuilder {
 
 > **Review correction:** The default large payload threshold is 1 MiB (1,048,576 bytes), not "1MB" (1,000,000 bytes). The builder's doc comment in the Dart source incorrectly says "100 KB" — the actual default from the interceptor constructor is 1,048,576 bytes.
 
+> **Server-only note:** The `withNetworkInfo()` and `withOfflineDetection()` builder methods are not ported. Server-side has no offline concept. For downstream service resilience, configure Polly policies via `AddStandardResilienceHandler()`.
+
 ### 3.3 `build()` Method -- Assembly Sequence
 
 The `build()` method is `async` (returns `Future<Dio>`) because it may need to write initial tokens. The assembly order:
@@ -137,6 +141,8 @@ The `build()` method is `async` (returns `Future<Dio>`) because it may need to w
 13. **Offline interceptor** -- Created with network info and cache refs
 14. **Cancellation interceptor** -- Created with `ActiveRequestTracker`
 15. **Interceptor chain** -- Added in specific order (see Section 4)
+
+> **Server-only note:** Steps 12 (`NetworkInfo`) and 13 (`OfflineInterceptor`) are skipped in the C# port. The build sequence goes directly from step 11 (managers stored) to step 14 (CancellationInterceptor) then step 15 (handler chain assembly with 7 handlers).
 
 ### 3.4 C# Porting Considerations
 
@@ -172,6 +178,18 @@ public class AcdcClientBuilder
     }
 }
 ```
+
+> **Server-only note:** Remove `OfflineHandler` from the C# pipeline. The correct server-side handler chain is:
+> ```csharp
+> services.AddHttpClient("acdc")
+>     .AddHttpMessageHandler<LoggingHandler>()
+>     .AddHttpMessageHandler<ErrorHandler>()
+>     .AddHttpMessageHandler<CancellationHandler>()
+>     .AddHttpMessageHandler<AuthHandler>()
+>     .AddHttpMessageHandler<CacheHandler>()
+>     // custom handlers here
+>     .AddHttpMessageHandler<DeduplicationHandler>();
+> ```
 
 > **Added from review:** The document recommends `IHttpClientFactory` but doesn't detail how ACDC's builder maps to .NET's `IServiceCollection.AddHttpClient()` fluent API:
 > ```csharp
@@ -210,6 +228,8 @@ Builder adds interceptors in this order:
   7. Custom interceptors (user-added)
   8. DeduplicationInterceptor  (inner-most)
 ```
+
+> **Server-only note:** Item 4 (`OfflineInterceptor`) is removed in the C# port. The chain becomes: 1. LoggingHandler → 2. ErrorHandler → 3. CancellationHandler → 4. AuthHandler → 5. CacheHandler → 6. Custom handlers → 7. DeduplicationHandler.
 
 ```mermaid
 sequenceDiagram
@@ -277,6 +297,8 @@ sequenceDiagram
         Log-->>App: Error
     end
 ```
+
+> **Server-only note:** The `Offline` participant and its connectivity check are removed from the C# port. The request flows directly from `CancellationHandler` to `AuthHandler`. Transient network failures to downstream services are handled by Polly circuit breaker/retry policies applied at the `IHttpClientFactory` level.
 
 > **Review correction:** The sequence diagram shows `ErrorInterceptor` actively participating in request and response phases (arrows like `Err->>Cancel` and `Err-->>Log`). In reality, `ErrorInterceptor` only overrides `onError` — it does NOT override `onRequest` or `onResponse` (`error_interceptor.dart:19-157`). Responses and requests flow through it transparently via Dio's default passthrough, but it does not actively process them. The diagram is technically correct for data flow but misleading about active participation.
 
@@ -405,6 +427,8 @@ class CancellationInterceptor extends Interceptor {
 
 #### 4.2.4 OfflineInterceptor
 
+> **Server-only note:** This interceptor is **not ported** to C#. Servers have stable network connections. For resilience against transient downstream failures, use Polly via `Microsoft.Extensions.Http.Resilience` — specifically `AddStandardResilienceHandler()` which provides circuit breaker, retry, and timeout policies. The cache fallback logic described here (serving stale cache when offline) is partially preserved in the CacheHandler via FusionCache's fail-safe feature.
+
 **File:** `lib/src/interceptors/offline_interceptor.dart`
 
 **Purpose:** Short-circuits requests when device is offline.
@@ -429,6 +453,8 @@ extension OfflineRequestOptions on RequestOptions {
 - **Mobile (.NET MAUI):** Use `Microsoft.Maui.Networking.Connectivity.NetworkAccess` or `Xamarin.Essentials.Connectivity`
 - Consider `IConnectivity` interface for testability
 - Cache fallback logic would be in the same `DelegatingHandler`
+
+> **Server-only note:** The MAUI/Xamarin connectivity options mentioned above do not apply. The entire `OfflineInterceptor`, `INetworkInfo` interface, and `NetworkInfoImpl` class are excluded from the C# server port.
 
 #### 4.2.5 AuthInterceptor
 
@@ -758,6 +784,8 @@ The builder stores managers in `dio.options.extra` (a `Map<String, dynamic>`), a
 | `_acdc_network_info` | `NetworkInfo` | `dio.networkInfo` |
 | `_acdc_active_request_tracker` | `ActiveRequestTracker` | `dio.activeRequestTracker` |
 
+> **Server-only note:** The `_acdc_network_info` key and `NetworkInfo` manager are not used in the C# port. The `HttpRequestMessage.Options` dictionary will only carry auth manager, cache manager, and request tracker references.
+
 ### 5.3 C# Porting
 
 C# extension methods work similarly:
@@ -788,6 +816,8 @@ public class AcdcHttpClient : IDisposable
     public INetworkInfo NetworkInfo { get; }
 }
 ```
+
+> **Server-only note:** Remove `INetworkInfo Network` from the wrapper class. The C# `AcdcHttpClient` wrapper only needs `HttpClient`, `AcdcAuthManager`, `AcdcCacheManager`, and `ActiveRequestTracker`.
 
 The wrapper approach is cleaner in C# than the `ConditionalWeakTable` approach and avoids the `options.extra` duck-typing pattern.
 
@@ -821,6 +851,8 @@ class ActiveRequestTracker {
 ```
 
 **Thread Safety Note:** Dart is single-threaded (event loop), so `Set` operations are safe. In C#, use `ConcurrentDictionary` or lock-based synchronization.
+
+> **Server-only note:** Thread safety is especially critical on server: `ActiveRequestTracker` must use `ConcurrentDictionary` (as shown in the C# sketch) since multiple concurrent HTTP requests from different threads may add/remove/cancel tokens simultaneously. The Dart single-threaded model does not apply.
 
 **C# Porting:**
 ```csharp
@@ -894,6 +926,8 @@ _logger.LogWarning("Slow request: {Method} {Url} took {Duration}ms", method, url
 ---
 
 ## 8. Network Info
+
+> **Server-only note:** The `NetworkInfo` abstraction and `NetworkInfoImpl` are **not ported** to C#. Server-side applications have reliable network connections. Network failure detection is handled at the HTTP client level via Polly resilience policies and `HttpRequestException` catch blocks. This entire section is for reference only.
 
 **File:** `lib/src/network_info/network_info.dart`
 
@@ -990,6 +1024,14 @@ Everything else is internal (`src/`) and not accessible to consumers.
 | **Timeouts** | 5-30s typical | 30-120s typical for inter-service |
 | **Retry/Backoff** | Must be battery-aware | Can be more aggressive |
 
+> **Server-only note:** For the C# port, only the "Server-Side (.NET)" column applies. All mobile/Flutter/MAUI considerations are excluded. Key server-side decisions:
+> - **Token storage**: In-memory `ITokenProvider` or `IDistributedCache` (Redis), not Keychain/Keystore
+> - **Offline support**: Not applicable — use Polly resilience policies instead
+> - **Certificate pinning**: Typically handled at infrastructure level (reverse proxy, service mesh), not in application code
+> - **Cache storage**: `IMemoryCache` (L1) + `IDistributedCache`/Redis (L2) via FusionCache
+> - **Timeouts**: 30-120s typical for inter-service calls (not 5-30s mobile default)
+> - **Logging**: `ILogger<T>` with structured logging, OpenTelemetry for distributed tracing
+
 ---
 
 ## 12. Key C# Porting Mapping Summary
@@ -1018,6 +1060,12 @@ Everything else is internal (`src/`) and not accessible to consumers.
 
 > **Added from review:** The C# `DelegatingHandler` pipeline differs from Dio's interceptor list in an important way. In Dio, request flows forward (index 0→N) and response flows backward (N→0). In C#, handlers are nested — the outermost handler executes first for requests AND sees responses last (wrapping the entire call). This means logging naturally sees both outgoing requests and incoming responses at the correct boundaries through the nesting of `await base.SendAsync()` calls.
 
+> **Server-only note:** The following Dart dependencies have no C# equivalent in the server port:
+> - `connectivity_plus` → **Removed** (no connectivity monitoring on server)
+> - `flutter_secure_storage` → `ITokenProvider` with in-memory or `IDistributedCache` implementation
+> - `dio_cache_interceptor` → FusionCache (`IMemoryCache` L1 + `IDistributedCache` Redis L2)
+> - The `Stream<T>` → `IAsyncEnumerable<T>` mapping for `NetworkInfo.onStatusChange` does not apply
+
 ---
 
 ## 13. Risks and Complexity Hotspots for Porting
@@ -1033,3 +1081,5 @@ Everything else is internal (`src/`) and not accessible to consumers.
 5. **Offline detection** -- Less relevant for server-side but critical for MAUI. Should be behind an interface with platform-specific implementations.
 
 6. **Interceptor ordering** -- .NET `DelegatingHandler` chain is explicit (handler wraps handler), making ordering more visible but also more verbose to set up.
+
+> **Server-only note:** Risk #5 (offline detection) is eliminated — `OfflineInterceptor` is not ported. The remaining risks (auth concurrent queuing, cache building, request retry cloning, extension-based access, interceptor ordering) all apply to the server port with heightened thread safety requirements.

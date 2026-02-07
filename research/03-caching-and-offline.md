@@ -4,6 +4,8 @@
 
 The Dart-ACDC caching subsystem provides a sophisticated, multi-layered HTTP response caching architecture with encrypted disk persistence, user isolation via JWT, HTTP cache semantics (Cache-Control, ETag, If-None-Match), stale-while-revalidate (SWR) patterns, and offline fallback support. The system is built around the `dio_cache_interceptor` package and extends it with custom interceptors for ACDC-specific behavior.
 
+> **Server-only note:** The C# server port significantly simplifies the caching architecture. The `EncryptedCacheStore`, `FlutterSecureStorage`-based key management, file-based persistence, and offline support are all **excluded**. The server cache stack is: L1 `IMemoryCache` + L2 `IDistributedCache` (Redis) via FusionCache. Offline detection and connectivity monitoring do not apply.
+
 ---
 
 ## 1. Two-Tier Cache Architecture (L1 Memory + L2 Disk)
@@ -22,6 +24,21 @@ Request Flow:
       |--- L1: MemCacheStore (in-memory LRU, 5MB default)
       |--- L2: EncryptedCacheStore (AES-256-GCM, file-based, 10MB default)
 ```
+
+> **Server-only note:** The server-side cache architecture replaces this with:
+> ```
+> Request Flow:
+>   GET /api/users
+>       |
+>       v
+>   [CacheHandler (DelegatingHandler)]
+>       |
+>       v
+>   [FusionCache]
+>       |--- L1: IMemoryCache (in-memory, per-process)
+>       |--- L2: IDistributedCache (Redis, shared across instances)
+> ```
+> No encryption layer is needed — Redis handles its own security via TLS and access control.
 
 ### 1.2 TwoTierCacheStore
 
@@ -74,6 +91,8 @@ Future<void> set(CacheResponse response) async {
 
 > **Added from review:** The `getFromPath()` method (`two_tier_cache_store.dart:132-160`) merges results from both tiers and deduplicates by key, preferring the memory tier's version. This deduplication behavior is important for the C# port.
 
+> **Server-only note:** `TwoTierCacheStore` is **not ported directly**. FusionCache natively provides L1 (memory) + L2 (distributed) caching with automatic promotion, fail-safe, and backplane support for multi-instance invalidation. The fire-and-forget L2 write pattern is handled by FusionCache internally.
+
 ### 1.3 CacheStoreFactory
 
 **Source**: `lib/src/cache/cache_store_factory.dart`
@@ -111,6 +130,8 @@ static CacheStore build(CacheConfig config) {
 }
 ```
 
+> **Server-only note:** `CacheStoreFactory` is **not ported**. There is no platform detection needed — the server always uses FusionCache with `IMemoryCache` (L1) + `IDistributedCache` (L2). Configuration is done via `IServiceCollection` DI registration, not a factory.
+
 ---
 
 ## 2. Cache Configuration Options and Defaults
@@ -133,6 +154,8 @@ static CacheStore build(CacheConfig config) {
 | `storePath` | `String?` | `null` | Custom cache storage path (defaults to app documents dir) |
 
 The `CacheConfig` class is immutable (all `final` fields, `const` constructor).
+
+> **Server-only note:** The `storePath` parameter is **not ported** (no file-based cache). The `onError` callback is replaced by `ILogger` error logging. The `version` parameter can still be used for cache invalidation (as a key prefix). The `userIdProvider` is replaced by extracting user identity from `HttpContext.User.Claims`.
 
 ---
 
@@ -330,6 +353,13 @@ The user ID is propagated via:
 
 ## 5. AES-256 Encryption of Cached Data
 
+> **Server-only note:** This entire section (`EncryptedCacheStore`, AES-256-GCM encryption, key management, serialization format) is **not ported** to the C# server. Server-side cache storage (Redis) handles its own security:
+> - **In-transit encryption**: Redis TLS
+> - **At-rest encryption**: Redis Enterprise encryption or infrastructure-level disk encryption
+> - **Access control**: Redis AUTH, ACLs, network isolation
+>
+> No application-level cache encryption is needed. This section is retained for reference only.
+
 ### 5.1 EncryptedCacheStore
 
 **Source**: `lib/src/cache/encrypted_cache_store.dart`
@@ -416,6 +446,13 @@ The store uses lazy initialization (`_ensureInitialized()`) to defer directory c
 ## 6. Offline Support / Stale-While-Revalidate Patterns
 
 ### 6.1 OfflineInterceptor
+
+> **Server-only note:** The `OfflineInterceptor` is **not ported** to C#. Servers have stable network connections. For resilience against transient downstream failures, use Polly via `Microsoft.Extensions.Http.Resilience`:
+> ```csharp
+> services.AddHttpClient("acdc")
+>     .AddStandardResilienceHandler(); // Circuit breaker + retry + timeout
+> ```
+> The cache fallback behavior (serving stale when network fails) is partially preserved via FusionCache's fail-safe feature (`IsFailSafeEnabled = true`). This section is retained for reference only.
 
 **Source**: `lib/src/interceptors/offline_interceptor.dart`
 
@@ -514,6 +551,8 @@ if (_config.staleWhileRevalidate && options.method.toUpperCase() == 'GET'
 }
 ```
 
+> **Server-only note:** SWR is still relevant on server-side for downstream API calls. FusionCache provides equivalent behavior via `FactorySoftTimeout` (serve stale after timeout while factory continues in background) and `AllowTimedOutFactoryBackgroundCompletion`. The custom SWR implementation in Dart is replaced by FusionCache's built-in support.
+
 > **Added from review:** The SWR code includes a `swr_callback` mechanism (`cache_interceptor.dart:234-239`) that allows callers to capture the background refresh `Future`:
 > ```dart
 > final swrCallback = options.extra['swr_callback'] as void Function(Future<dynamic>)?;
@@ -538,6 +577,8 @@ void resolve(Response<dynamic> response) {
   originalHandler.resolve(response);
 }
 ```
+
+> **Server-only note:** Stale-if-error is preserved in the C# port via FusionCache's `IsFailSafeEnabled = true` and `FailSafeMaxDuration`. This is the server-side equivalent of serving cached data when downstream services are unavailable.
 
 > **Added from review:** The `_CacheAwareErrorHandler.next()` method (`cache_interceptor.dart:555-572`) detects network errors (connection timeout, send timeout, receive timeout, connection error) and enhances them into `AcdcNetworkException.fromDioException()`. The cache interceptor itself produces typed network exceptions when `dio_cache_interceptor` cannot serve from cache during errors.
 
@@ -564,6 +605,8 @@ void onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) 
 ### 7.2 Version-Based Invalidation
 
 Changing the `CacheConfig.version` string clears the entire cache on next initialization. This is stored in `FlutterSecureStorage` and compared during `EncryptedCacheStore._initialize()`.
+
+> **Server-only note:** Version-based invalidation is simpler on server: use a cache key prefix containing the version string, or use FusionCache's `Clear()` method. No `FlutterSecureStorage` version tracking is needed.
 
 ### 7.3 Manual Invalidation via AcdcCacheManager
 
@@ -608,6 +651,8 @@ extension AcdcCache on Dio {
 
 The manager is injected during `AcdcClientBuilder.build()` and delegates to `AcdcCacheInterceptor`. It returns a no-op manager when cache is disabled.
 
+> **Server-only note:** The `AcdcCacheManager` on server wraps FusionCache operations. The `dio.cache` extension pattern maps to injecting `IAcdcCacheManager` via DI, or accessing it through the `AcdcHttpClient` wrapper class.
+
 ---
 
 ## 9. Test Coverage Summary
@@ -648,6 +693,12 @@ The Dart-ACDC caching system is designed for a **mobile/client** context. For a 
 | **Two-tier cache** | Memory + encrypted file | **Memory + Redis** or **IDistributedCache** |
 | **Offline support** | Essential (mobile goes offline) | **Not applicable** (server is always online) |
 | **User isolation** | Via JWT claim extraction | Via `HttpContext.User.Identity` / `ClaimsPrincipal` |
+
+> **Server-only note:** Only the "C# (Server)" column applies. All Dart client-side patterns are excluded. Key server-side cache decisions:
+> - **No encrypted cache** — Redis handles security
+> - **No file-based cache** — Redis for persistence
+> - **No offline support** — use Polly + FusionCache fail-safe
+> - **User isolation** — via `HttpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)`, not JWT parsing
 
 ### 10.2 Package Mapping
 
@@ -761,6 +812,8 @@ public class EncryptedCacheStore : ICacheStore
 
 > **Added from review:** For .NET MAUI client scenarios, `SecureStorage` from `Microsoft.Maui.Storage` is the direct equivalent of `FlutterSecureStorage`.
 
+> **Server-only note:** The ".NET MAUI Client" subsection above does **not apply** — the C# port is server-only. The `TwoTierCache` class with `LiteDatabase`, the `EncryptedCacheStore` with `AesGcm`, and all mobile-specific cache patterns are excluded. Only the "ASP.NET Core Server" architecture (FusionCache + Redis) is implemented.
+
 ### 10.4 Cache Key Generation in C#
 
 ```csharp
@@ -817,6 +870,11 @@ public static class CacheKeyBuilder
 | `Microsoft.Extensions.Caching.Memory` | Built-in L1 memory cache | Included in framework |
 | `System.IdentityModel.Tokens.Jwt` | JWT parsing (if needed outside auth middleware) | `dotnet add package System.IdentityModel.Tokens.Jwt` |
 | `Polly` | Circuit breaker / retry (replaces offline interceptor) | `dotnet add package Polly` |
+
+> **Server-only note:** All dependencies listed are correct for the server port. Additional exclusions:
+> - No `System.Security.Cryptography.AesGcm` needed (no cache encryption)
+> - No `LiteDB` / `Microsoft.Data.Sqlite` needed (no file-based cache)
+> - No `Microsoft.Maui.Storage.SecureStorage` needed (no mobile secure storage)
 
 ---
 

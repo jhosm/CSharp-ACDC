@@ -183,6 +183,8 @@ connectionError   -> NetworkErrorType.noConnection
 default           -> NetworkErrorType.other
 ```
 
+> **Server-only note:** On server, `NetworkErrorType.noConnection` is less common (servers have stable connections) but still relevant for downstream API failures. The C# port should map `HttpRequestException` and `TaskCanceledException` to `AcdcNetworkException` with appropriate `NetworkErrorType` values. The `NetworkErrorType.cancelled` maps to `OperationCanceledException` / `TaskCanceledException` in C#.
+
 > **Added from review:** `AcdcNetworkException` passes `type: originalException.type` to the `super` constructor (`acdc_network_exception.dart:42`), preserving the original Dio exception type. This is different from other subclasses that hardcode their type to `DioExceptionType.badResponse`.
 
 #### AcdcCacheException (cache operations)
@@ -223,6 +225,8 @@ String toString() {
   // ...
 }
 ```
+
+> **Server-only note:** Certificate pinning is typically handled at infrastructure level on servers (reverse proxy, service mesh). `AcdcSecurityException` may not be needed in the server port unless specific downstream API certificate validation is required. Consider making it an optional/internal type.
 
 > **Added from review:** `AcdcSecurityException` does NOT have a `fromDioException()` factory — it is only created directly in `PinningVerifier.verify()` (`pinning_verifier.dart:73-79`). The `ErrorInterceptor` does NOT convert `DioExceptionType.badCertificate` to `AcdcSecurityException`. This means the security exception has a completely different throw path from all other exceptions. In C#, it should be handled in the certificate validation callback, not in the `DelegatingHandler` error pipeline.
 
@@ -327,6 +331,14 @@ test/
   public_api_test.dart                  # Verifies all public types are exported
   enforce_export_policy_test.dart       # Filesystem-level export enforcement
 ```
+
+> **Server-only note:** The following test infrastructure is **not ported**:
+> - `mock_network_info.dart` — no `INetworkInfo` on server
+> - Offline interceptor tests — `OfflineInterceptor` not ported
+> - `flutter_test` bindings — no Flutter dependency
+> - `MethodChannel` mocking — no platform channels
+>
+> The `FakeTokenProvider` is ported as `InMemoryTokenProvider` implementing `ITokenProvider` (must be thread-safe with `lock` or `ConcurrentDictionary`).
 
 > **Added from review:** Missing from the test listing: `test/interceptors/error_interceptor_test.dart` (274 lines) — comprehensive test file covering all status code mappings (401, 403, 4xx, 5xx), all network error types, and edge cases (malformed responses, 3xx redirects, non-standard status codes like 418, 451, 599).
 
@@ -467,6 +479,8 @@ class MockNetworkInfo implements NetworkInfo {
   void dispose() { _disposed = true; }
 }
 ```
+
+> **Server-only note:** `MockNetworkInfo` is **not ported**. There is no `INetworkInfo` interface in the C# server port. Network failure testing is done via mock `HttpMessageHandler` that throws `HttpRequestException` or returns error status codes.
 
 ### 3.5 Integration Test Scenarios
 
@@ -622,6 +636,18 @@ The barrel file exports:
 
 > **Added from review:** The handler ordering in the C# `IHttpClientFactory` example should match the interceptor chain order: Logging → Error → Cancellation → Auth → Cache → Custom → Deduplication (not the arbitrary order shown in the document).
 
+> **Server-only note:** The following Dart dependencies are **excluded** from the C# server port:
+> - `flutter` SDK → Not applicable (no Flutter)
+> - `connectivity_plus` → Removed (no connectivity monitoring)
+> - `flutter_secure_storage` → Replaced by `InMemoryTokenProvider` or `IDistributedCache`
+> - `http_cache_file_store` → Replaced by `IDistributedCache` (Redis)
+> - `encrypt` (AES) → Not needed (no cache encryption; Redis handles security)
+> - `path_provider` → Not needed (no file paths)
+> - `pretty_dio_logger` → Replaced by `ILogger<T>` with structured logging
+> - `meta` → Built-in C# attributes
+>
+> Core dependencies for the server port: `HttpClient` + `DelegatingHandler`, `FusionCache`, `Microsoft.Extensions.Caching.StackExchangeRedis`, `System.IdentityModel.Tokens.Jwt` (for downstream API token forwarding), `Polly` (via `Microsoft.Extensions.Http.Resilience`).
+
 > **Review correction:** The barrel file's doc comment says `Dart SDK: >=3.0.0` and `Flutter: >=3.10.0`, but `pubspec.yaml` says `sdk: ">=3.6.0 <4.0.0"` and `flutter: ">=3.38.0"`. The `pubspec.yaml` is the source of truth. The C# port should specify its .NET version requirement clearly.
 
 ### 5.2 Dev Dependencies
@@ -638,6 +664,12 @@ The barrel file exports:
 | `flutter_lints` | ^6.0.0 | Lint rules | `.editorconfig` + Roslyn analyzers |
 | `connectivity_plus_platform_interface` | any | Platform abstraction | Not needed |
 | `path` | any | Path manipulation | `System.IO.Path` |
+
+> **Server-only note:** The following dev dependencies are **excluded**:
+> - `flutter_test` → Use `xUnit` only
+> - `connectivity_plus_platform_interface` → Not needed
+> - `build_runner` / `built_value` / `built_collection` → Use C# `record` types and source generators
+> - `flutter_lints` → Use `.editorconfig` + Roslyn analyzers
 
 ### 5.3 Key Mapping Decisions
 
@@ -699,6 +731,8 @@ server.Given(Request.Create().WithPath("/token").UsingPost())
 
 **Recommendation**: The `TokenProvider` interface translates directly. Let consumers provide their own `ITokenProvider`. Ship a `MemoryTokenProvider` for testing and simple cases.
 
+> **Server-only note:** Only the server-side option applies: `InMemoryTokenProvider` as default, `IDistributedCache`-backed provider for distributed deployments. No `DPAPI`, `Keychain`, or `SecureStorage` needed.
+
 ### 6.2 `connectivity_plus` -> Network Monitoring
 
 **Dart**: Used to detect online/offline state for cache fallback decisions.
@@ -710,11 +744,15 @@ server.Given(Request.Create().WithPath("/token").UsingPost())
 
 **Recommendation**: Make `INetworkInfo` optional in the builder. Default to "always online" for server scenarios. This is already how the Dart code handles testing (`MockNetworkInfo` returns `isConnected => true`).
 
+> **Server-only note:** `INetworkInfo` is **not ported**. No connectivity monitoring is needed on server. Network failures to downstream services are detected via `HttpRequestException` and handled by Polly resilience policies.
+
 ### 6.3 `path_provider` -> File Paths
 
 **Dart**: Gets platform-specific directories (temp, app support, etc.) for cache file storage.
 
 **C#**: Use `Environment.GetFolderPath()` or `Path.GetTempPath()`. Much simpler.
+
+> **Server-only note:** Not applicable. No file-based cache on server. Cache persistence is via `IDistributedCache` (Redis).
 
 ### 6.4 Flutter Test Bindings
 
@@ -735,6 +773,8 @@ TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
 
 **C#**: No equivalent needed. Interface-based DI eliminates platform coupling.
 
+> **Server-only note:** Sections 6.4 and 6.5 do not apply. No Flutter test bindings or platform channel mocking needed. C# uses standard xUnit with `IServiceCollection` for DI and interface-based mocking.
+
 ---
 
 ## 7. Example Code Analysis
@@ -748,6 +788,24 @@ The example demonstrates five usage patterns:
 3. **With caching**: `withCache(CacheConfig())` -- default 1-hour TTL
 4. **With custom logging**: `withLogDelegate(MyLogDelegate())` + `withLogLevel(LogLevel.debug)`
 5. **With custom token provider**: `withTokenProvider(MyTokenProvider())` -- user implements TokenProvider
+
+> **Server-only note:** The C# server equivalent of these patterns uses `IServiceCollection` DI registration:
+> ```csharp
+> // Zero-config
+> services.AddAcdcHttpClient("api");
+>
+> // With authentication
+> services.AddAcdcHttpClient("api", options => {
+>     options.TokenRefreshEndpoint = "https://auth.example.com/token";
+>     options.ClientId = "my-service";
+> });
+>
+> // With caching
+> services.AddAcdcHttpClient("api", options => {
+>     options.Cache.Ttl = TimeSpan.FromHours(1);
+>     options.Cache.EnableStaleWhileRevalidate = true;
+> });
+> ```
 
 **Key example patterns for C# port**:
 
@@ -881,6 +939,8 @@ public enum CacheOperation
 - `HttpRequestException` is somewhat HTTP-specific; cache and security exceptions are not HTTP errors
 - `HttpRequestException.StatusCode` is `HttpStatusCode?` (enum), Dart uses `int?`
 
+> **Server-only note:** For server-side, Option A (extend `HttpRequestException`) is strongly recommended. Server code commonly catches `HttpRequestException` for downstream API error handling. ACDC exceptions being catchable as `HttpRequestException` enables gradual adoption in existing server codebases.
+
 > **Added from review:** `HttpRequestException.StatusCode` was only added in .NET 5.0. The document should specify minimum .NET version. Also, `HttpRequestException` does not have a built-in `InnerException` typed as `HttpRequestException` — `OriginalException` would need to be a separate property.
 
 > **Added from review:** For `AcdcCacheException`, extending `HttpRequestException` creates a semantic problem: a cache read failure is not an HTTP request exception. Consider having `AcdcCacheException` extend `AcdcException` which extends `Exception` (not `HttpRequestException`), breaking with the Dart pattern where this was forced by `DioException` inheritance. This supports Option B or a hybrid approach for non-HTTP exceptions.
@@ -922,6 +982,14 @@ For `AcdcCacheException` and `AcdcSecurityException`, which are not HTTP-respons
 | Public API test (type existence checks) | Assembly reflection test scanning exported types |
 | Export policy test (filesystem check) | InternalsVisibleTo + API analyzer |
 | `expectLater(expr, throwsA(isA<T>()))` | `await Assert.ThrowsAsync<T>(() => expr)` |
+
+> **Server-only note:** Server-side test infrastructure replaces mobile-specific patterns:
+> - `FakeTokenProvider` → `InMemoryTokenProvider` (thread-safe, reusable across tests)
+> - `MockNetworkInfo` → **Not needed** (no `INetworkInfo`)
+> - `FakeOAuthServer` → `WireMock.Net` or `TestServer` (ASP.NET Core `TestHost`)
+> - `DioAdapter` → `MockHttpMessageHandler` or `RichardSzalay.MockHttp`
+>
+> All test helpers must be thread-safe for server scenarios where tests may run concurrently.
 
 > **Added from review:** For structured logging, the C# port should use the standard `ILogger<T>` interface rather than a custom delegate. The `toMap()` method maps well to structured logging:
 > ```csharp
