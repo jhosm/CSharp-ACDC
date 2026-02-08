@@ -23,23 +23,66 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 ## Status
 
-Research/planning phase. No C# code written yet. Detailed analysis of the Dart source lives in `research/`. Review findings have been incorporated into the research docs (marked with `> **Review correction:**` and `> **Added from review:**` blockquotes). Server-only decisions are marked with `> **Server-only note:**` blockquotes.
+Research/planning phase. No C# code written yet. 11 OpenSpec change proposals (P1-P11) are ready for implementation. Detailed analysis of the Dart source lives in `research/`.
+
+## Prerequisites
+
+- .NET 8+ SDK
+- Redis (for integration tests with L2 cache — P8)
+- `openspec` CLI (manages change proposals)
+- `bd` CLI (issue tracking via beads)
+
+## Commands
+
+```bash
+# OpenSpec — change proposal workflow
+openspec list                              # List all proposals and status
+openspec validate <change-id>              # Validate a proposal
+openspec apply <change-id>                 # Apply a proposal (merges spec deltas)
+openspec archive <change-id>               # Archive a completed proposal
+
+# Beads — issue tracking
+bd ready                                   # Find available work
+bd show <id>                               # View issue details
+bd update <id> --status in_progress        # Claim work
+bd close <id>                              # Complete work
+bd sync                                    # Sync with git
+```
+
+Once P1 scaffold lands:
+```bash
+dotnet build                               # Build solution
+dotnet test                                # Run all tests
+dotnet test tests/CSharpAcdc.Tests         # Unit tests only
+dotnet test tests/CSharpAcdc.IntegrationTests  # Integration tests only
+```
 
 ## Repository Structure
 
 ```
+openspec/
+  AGENTS.md                                # OpenSpec conventions and format rules
+  project.md                               # Tech stack, code style, architecture patterns
+  changes/                                 # 11 change proposals (P1-P11)
+    add-solution-scaffold/                 # P1: .NET solution, CPM, build config
+    add-exceptions-and-error-handler/      # P2: Exception hierarchy, ErrorHandler
+    add-logging-handler/                   # P3: Structured logging, redaction
+    add-cancellation-and-dedup-handlers/   # P4: CancellationHandler, DeduplicationHandler
+    add-auth-system/                       # P5: Token provider, refresh, backoff, AuthHandler
+    add-cache-system/                      # P6: FusionCache, SWR, ETag, CacheHandler
+    add-builder-and-di/                    # P7: Fluent builder, AddAcdcHttpClient() DI
+    add-integration-tests/                 # P8: E2E tests with WireMock.Net
+    add-ci-and-nuget-publishing/           # P9: GitHub Actions CI/CD
+    add-documentation-and-examples/        # P10: README, samples, migration guide
+    add-nuget-package-metadata/            # P11: Source Link, symbols, license
 research/
-  01-architecture-and-interceptors.md       # Builder, interceptor chain, extension methods
-  01-architecture-and-interceptors-REVIEW.md # Cross-review with corrections
-  02-authentication-and-security.md         # Auth, token refresh, cert pinning, JWT
-  02-authentication-and-security-REVIEW.md
-  03-caching-and-offline.md                 # Two-tier cache, SWR, offline fallback
-  03-caching-and-offline-REVIEW.md
-  04-exceptions-tests-dependencies.md       # Exceptions, tests, dependency mapping
-  04-exceptions-tests-dependencies-REVIEW.md
+  01-architecture-and-interceptors.md      # Builder, interceptor chain, extension methods
+  02-authentication-and-security.md        # Auth, token refresh, cert pinning, JWT
+  03-caching-and-offline.md                # Two-tier cache, SWR, offline fallback
+  04-exceptions-tests-dependencies.md      # Exceptions, tests, dependency mapping
+  *-REVIEW.md                             # Cross-review corrections (incorporated into main docs)
+.claude/commands/openspec/                 # Slash commands: /apply, /archive, /proposal
 ```
-
-The `-REVIEW` files contain corrections and additional details. Review findings have been incorporated into the main docs — the REVIEW files are kept for reference/audit trail.
 
 ## Server-Only Scope
 
@@ -149,6 +192,7 @@ HttpRequestException
 - **Auth error vs transient error distinction is critical** — transient errors (network, 5xx) preserve tokens; auth errors (invalid_grant) clear tokens
 - **DeduplicationInterceptor** only deduplicates GETs with identical URL+headers — not POSTs
 - **User identity on server** — prefer `HttpContext.User.Claims` from ASP.NET Core auth middleware over manual JWT parsing
+- **No `.gitignore` yet** — be careful not to commit `.claude/settings.local.json`, `.env`, or other local-only files. P1 scaffold will add a proper `.gitignore`.
 
 ## Code Style
 
