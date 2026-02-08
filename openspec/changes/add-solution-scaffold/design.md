@@ -17,6 +17,7 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 - No CI/CD pipeline configuration (that is a separate concern).
 - No Docker or deployment configuration.
 - No actual test cases — only the test project infrastructure.
+- No `NuGet.config` — the project uses only nuget.org, so the default package source is sufficient.
 
 ## Decisions
 
@@ -32,9 +33,9 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 ### 2. `Directory.Build.props` for Shared Build Settings
 
-**Decision:** Use `Directory.Build.props` at the solution root to set `TargetFramework`, `Nullable`, `ImplicitUsings`, `TreatWarningsAsErrors`, and other shared settings.
+**Decision:** Use `Directory.Build.props` at the solution root to set `TargetFramework`, `LangVersion`, `Nullable`, `ImplicitUsings`, `TreatWarningsAsErrors`, and `EnforceCodeStyleInBuild`. `LangVersion` is explicitly set to `12` even though .NET 8 defaults to C# 12, to prevent drift if the SDK version changes. `EnforceCodeStyleInBuild` is set to `true` so that `.editorconfig` style rules are evaluated by Roslyn analyzers during `dotnet build`, not only in IDEs.
 
-**Why:** Avoids duplicating settings across three `.csproj` files. Any new projects added later automatically inherit these settings. Changes to the target framework happen in one place.
+**Why:** Avoids duplicating settings across three `.csproj` files. Any new projects added later automatically inherit these settings. Changes to the target framework or language version happen in one place. Without `EnforceCodeStyleInBuild`, `.editorconfig` rules are advisory during CLI builds — CI would never catch style violations.
 
 ### 3. Front-Load ALL NuGet Packages
 
@@ -44,7 +45,13 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 **Trade-off:** The initial `dotnet restore` downloads packages that are not yet used. This is negligible (a few MB of NuGet cache) compared to the developer-hours saved from avoiding merge conflicts.
 
-### 4. Separate Integration Test Project
+### 4. `.gitignore` for Build Artifacts and Local Files
+
+**Decision:** Include a `.gitignore` file at the repository root covering .NET build artifacts (`bin/`, `obj/`, `*.user`, `.vs/`), IDE files (`.idea/`, `*.suo`), OS files (`.DS_Store`), and local-only files (`.claude/settings.local.json`, `.env`).
+
+**Why:** Prevents accidental commits of build output, IDE state, and sensitive local configuration. This is a prerequisite for all subsequent development — without it, the first `git add .` after implementation risks committing binary artifacts and secrets.
+
+### 5. Separate Integration Test Project
 
 **Decision:** Create a dedicated `tests/CSharpAcdc.IntegrationTests/` project separate from the unit test project.
 
@@ -53,13 +60,13 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 - Separation allows running `dotnet test --filter` by project for faster feedback loops during development.
 - CI can run unit tests and integration tests as separate stages with different failure policies.
 
-### 5. `.editorconfig` for Code Style Enforcement
+### 6. `.editorconfig` for Code Style Enforcement
 
-**Decision:** Include an `.editorconfig` file enforcing project conventions (file-scoped namespaces, expression-body preferences, naming conventions, indentation).
+**Decision:** Include an `.editorconfig` file enforcing project conventions (file-scoped namespaces, expression-body preferences, naming conventions with `_camelCase` for private fields, indentation).
 
 **Why:** Ensures consistent formatting across all contributors and IDEs (Visual Studio, Rider, VS Code). Prevents style-only diffs that pollute PRs.
 
-### 6. `global.json` for SDK Version Pinning
+### 7. `global.json` for SDK Version Pinning
 
 **Decision:** Pin the .NET 8 SDK version via `global.json` with a `latestFeature` rollForward policy.
 
@@ -67,11 +74,17 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 **Roll-forward policy:** `latestFeature` allows the SDK to roll forward to the latest feature band within the same major version, balancing stability with security patches.
 
-### 7. Namespace-Aligned Directory Structure
+### 8. Namespace-Aligned Directory Structure
 
 **Decision:** Create a directory skeleton under `src/CSharpAcdc/` with folders matching the intended namespace structure: Exceptions, Handlers, Auth, Cache, Logging, Configuration, Extensions, Builder, Client.
 
 **Why:** Establishes the module boundaries up front so subsequent proposals know exactly where to place their code. `.gitkeep` files ensure empty directories are tracked by Git.
+
+### 9. Solution Folders for Project Organization
+
+**Decision:** Use solution folders (`src` and `tests`) inside the `.sln` file to group projects logically in IDE solution explorers.
+
+**Why:** Without solution folders, all three projects appear flat in the IDE. Solution folders provide visual hierarchy that matches the physical directory structure, making navigation easier as the solution grows.
 
 ## Risks / Trade-offs
 
@@ -84,4 +97,4 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 ## Open Questions
 
-None. This is a straightforward infrastructure proposal with well-established .NET patterns.
+None. All design decisions have been finalized.

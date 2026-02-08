@@ -178,7 +178,7 @@ HttpRequestException
 | `package:test` | xUnit |
 | `mockito` | Moq or NSubstitute |
 | `http_mock_adapter` (DioAdapter) | `MockHttpMessageHandler` or `RichardSzalay.MockHttp` |
-| `shelf` / `shelf_io` (real HTTP server) | `TestServer` (`Microsoft.AspNetCore.TestHost`) or `WireMock.Net` |
+| `shelf` / `shelf_io` (real HTTP server) | `WebApplicationFactory<T>` (`Microsoft.AspNetCore.Mvc.Testing`) or `WireMock.Net` |
 | `FakeTokenProvider` (in-memory) | `MemoryTokenProvider` implementing `ITokenProvider` (must be thread-safe) |
 | `MockNetworkInfo` (always-online) | **Removed** — no `INetworkInfo` on server |
 

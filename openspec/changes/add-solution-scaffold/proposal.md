@@ -6,11 +6,12 @@ The CSharp-ACDC library needs a .NET solution structure before any code can be w
 
 ## What Changes
 
-- **`CSharp-ACDC.sln`** — Solution file organizing source and test projects
+- **`.gitignore`** — Git ignore rules for .NET build artifacts, IDE files, and local-only files (`.claude/settings.local.json`, `.env`, etc.)
+- **`CSharp-ACDC.sln`** — Solution file organizing source and test projects into `src` and `tests` solution folders
 - **`src/CSharpAcdc/CSharpAcdc.csproj`** — net8.0 class library with nullable enabled and all NuGet package references
 - **`tests/CSharpAcdc.Tests/CSharpAcdc.Tests.csproj`** — xUnit unit test project with NSubstitute, FluentAssertions, MockHttp, and all test packages
 - **`tests/CSharpAcdc.IntegrationTests/CSharpAcdc.IntegrationTests.csproj`** — Integration test project for WireMock.Net tests requiring longer timeouts
-- **`Directory.Build.props`** — Shared build settings (TFM net8.0, nullable enabled, implicit usings, TreatWarningsAsErrors)
+- **`Directory.Build.props`** — Shared build settings (TFM net8.0, C# 12, nullable enabled, implicit usings, TreatWarningsAsErrors)
 - **`Directory.Packages.props`** — Central package version management for all NuGet dependencies
 - **`.editorconfig`** — Code style rules matching project conventions (file-scoped namespaces, etc.)
 - **`global.json`** — .NET SDK version pin for reproducible builds
@@ -27,6 +28,7 @@ The CSharp-ACDC library needs a .NET solution structure before any code can be w
 | `Microsoft.Extensions.Options` | `IOptions<T>` configuration pattern |
 | `ZiggyCreatures.FusionCache` | Two-tier cache (L1 memory + L2 Redis) |
 | `ZiggyCreatures.FusionCache.Serialization.SystemTextJson` | FusionCache JSON serialization |
+| `ZiggyCreatures.FusionCache.Backplane.StackExchangeRedis` | FusionCache Redis backplane for L1 cache synchronization across instances |
 | `System.IdentityModel.Tokens.Jwt` | JWT token parsing and validation |
 
 ### Pre-loaded NuGet packages (test projects):
@@ -40,7 +42,7 @@ The CSharp-ACDC library needs a .NET solution structure before any code can be w
 | `RichardSzalay.MockHttp` | HTTP message handler mocking |
 | `WireMock.Net` | Integration test HTTP server |
 | `FluentAssertions` | Assertion library |
-| `Microsoft.AspNetCore.TestHost` | In-process test server |
+| `Microsoft.AspNetCore.Mvc.Testing` | In-process test server with `WebApplicationFactory<T>` for DI-aware integration tests |
 | `coverlet.collector` | Code coverage |
 
 ### Directory skeleton (`src/CSharpAcdc/`):
