@@ -6,7 +6,7 @@ Automated CI/CD ensures code quality (build, test, coverage) on every PR and ena
 ## What Changes
 - `.github/workflows/ci.yml` — continuous integration workflow:
   - Triggered on: push to `main`, pull requests
-  - Matrix: .NET 8 on ubuntu-latest
+  - Matrix: .NET 10 on ubuntu-latest
   - Steps: checkout, setup .NET, restore, build (TreatWarningsAsErrors), unit tests with coverage, integration tests, upload coverage report
   - Separate test steps for `CSharpAcdc.Tests` and `CSharpAcdc.IntegrationTests`
   - NuGet package cache for speed

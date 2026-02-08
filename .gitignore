@@ -1,0 +1,20 @@
+# .NET build artifacts
+bin/
+obj/
+*.user
+*.suo
+*.DotSettings.user
+
+# IDE files
+.vs/
+.idea/
+*.sln.DotSettings
+
+# Local-only files
+.claude/settings.local.json
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db

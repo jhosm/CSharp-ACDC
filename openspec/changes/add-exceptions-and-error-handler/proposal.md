@@ -15,7 +15,7 @@ All handlers in the CSharp-ACDC pipeline need a shared exception hierarchy for t
 - **`AcdcAuthException`** -- represents 401/403 failures with status-specific messages and `FromStatusCode()` factory method
 - **`AcdcClientException`** -- represents 4xx errors with nullable `RetryAfter` property parsed from `RetryConditionHeaderValue`
 - **`AcdcServerException`** -- represents 5xx errors
-- **`AcdcNetworkException`** -- classifies network failures using `NetworkErrorType`, maps from .NET 8's `HttpRequestException.HttpRequestError`
+- **`AcdcNetworkException`** -- classifies network failures using `NetworkErrorType`, maps from `HttpRequestException.HttpRequestError`
 - **`AcdcCacheException`** -- represents cache operation failures using `CacheOperation` enum with stub factory methods (finalized in P6)
 
 ### ErrorHandler

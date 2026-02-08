@@ -8,7 +8,7 @@
 - [ ] 1.4 Implement `AcdcAuthException` with `FromStatusCode()` factory method generating status-specific messages (401: "Authentication failed: Invalid or expired token", 403: "Authorization failed: Insufficient permissions")
 - [ ] 1.5 Implement `AcdcClientException` with `RetryAfter` property parsed from `RetryConditionHeaderValue`
 - [ ] 1.6 Implement `AcdcServerException` for 5xx errors
-- [ ] 1.7 Implement `AcdcNetworkException` with `NetworkErrorType` property and mapping from .NET 8 `HttpRequestError` enum
+- [ ] 1.7 Implement `AcdcNetworkException` with `NetworkErrorType` property and mapping from `HttpRequestError` enum
 - [ ] 1.8 Implement `AcdcCacheException` with `CacheOperation` property and stub factory methods (`ReadFailed`, `WriteFailed`, `DeleteFailed`, `ClearFailed`) -- finalized in P6
 
 ## 2. Error Handler

@@ -4,7 +4,7 @@
 
 Dart-ACDC uses a custom `TwoTierCacheStore` with L1 (`MemCacheStore`, in-memory LRU) and L2 (`EncryptedCacheStore`, AES-encrypted file-based storage). It implements stale-while-revalidate (SWR) and ETag/If-None-Match manually in `CacheInterceptor`, with user isolation via JWT-extracted user IDs baked into cache keys.
 
-The C# port targets server-side only (ASP.NET Core / .NET 8+). On server, file-based encrypted cache is inappropriate -- Redis via `IDistributedCache` is the standard L2. FusionCache is a mature .NET library that provides L1 (`IMemoryCache`) + L2 (`IDistributedCache`/Redis) with built-in SWR (`FactorySoftTimeout`), fail-safe (`IsFailSafeEnabled`), stampede prevention (single-flight), and automatic L1/L2 synchronization. Using FusionCache replaces hundreds of lines of custom Dart cache management code with a battle-tested library.
+The C# port targets server-side only (ASP.NET Core / .NET 10). On server, file-based encrypted cache is inappropriate -- Redis via `IDistributedCache` is the standard L2. FusionCache is a mature .NET library that provides L1 (`IMemoryCache`) + L2 (`IDistributedCache`/Redis) with built-in SWR (`FactorySoftTimeout`), fail-safe (`IsFailSafeEnabled`), stampede prevention (single-flight), and automatic L1/L2 synchronization. Using FusionCache replaces hundreds of lines of custom Dart cache management code with a battle-tested library.
 
 Key stakeholders: any ASP.NET Core service consuming downstream HTTP APIs through the ACDC pipeline. The cache handler sits at position 5 in the handler chain (after Auth, before Custom and Deduplication handlers).
 

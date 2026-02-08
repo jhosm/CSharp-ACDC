@@ -19,7 +19,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 # CSharp-ACDC
 
-**Server-only** C# port of **Dart-ACDC** (Authentication, Caching, Debugging, Client) — a production HTTP client library with auth, caching, logging, and structured error handling. Targets ASP.NET Core / .NET 8+.
+**Server-only** C# port of **Dart-ACDC** (Authentication, Caching, Debugging, Client) — a production HTTP client library with auth, caching, logging, and structured error handling. Targets ASP.NET Core / .NET 10.
 
 ## Status
 
@@ -77,7 +77,7 @@ P7: add-builder-and-di  <-- waits for P3+P4+P5+P6
 
 ## Prerequisites
 
-- .NET 8+ SDK
+- .NET 10 SDK
 - Redis (for integration tests with L2 cache — P8)
 - `openspec` CLI (manages change proposals)
 - `bd` CLI (issue tracking via beads)
@@ -245,11 +245,11 @@ HttpRequestException
 - **Auth error vs transient error distinction is critical** — transient errors (network, 5xx) preserve tokens; auth errors (invalid_grant) clear tokens
 - **DeduplicationInterceptor** only deduplicates GETs with identical URL+headers — not POSTs
 - **User identity on server** — prefer `HttpContext.User.Claims` from ASP.NET Core auth middleware over manual JWT parsing
-- **No `.gitignore` yet** — be careful not to commit `.claude/settings.local.json`, `.env`, or other local-only files. P1 scaffold will add a proper `.gitignore`.
+- **`.gitignore` is in place** — build artifacts, IDE files, `.env`, and OS files are excluded.
 
 ## Code Style
 
-- Target: .NET 8+, C# 12, ASP.NET Core
+- Target: .NET 10, C# 14, ASP.NET Core
 - `IHttpClientFactory` for all `HttpClient` usage — never `new HttpClient()`
 - Use `record` types for DTOs and immutable config
 - Use `IOptions<T>` pattern for configuration

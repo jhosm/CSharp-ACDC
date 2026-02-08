@@ -36,11 +36,11 @@ Key difference from Dart: C#'s `HttpClient` does NOT throw exceptions for 4xx/5x
 - Custom `AcdcException : Exception` -- breaks `catch (HttpRequestException)` compatibility
 - Hybrid (HTTP exceptions extend `HttpRequestException`, cache extends `Exception`) -- splits the hierarchy, complicates catch blocks
 
-### 2. Use .NET 8 `HttpRequestError` enum for network error classification
+### 2. Use `HttpRequestError` enum for network error classification
 
 **Decision:** Map `HttpRequestException.HttpRequestError` to `NetworkErrorType` enum values.
 
-**Rationale:** Replaces Dart's fragile string matching on error messages (e.g., `"socketexception"`, `"failed host lookup"`). .NET 8 added `HttpRequestError` to `HttpRequestException`, providing structured error classification:
+**Rationale:** Replaces Dart's fragile string matching on error messages (e.g., `"socketexception"`, `"failed host lookup"`). `HttpRequestError` on `HttpRequestException` provides structured error classification:
 
 ```
 HttpRequestError.NameResolutionError  -> NetworkErrorType.DnsResolutionFailed

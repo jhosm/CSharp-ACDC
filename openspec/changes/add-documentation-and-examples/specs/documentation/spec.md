@@ -15,7 +15,7 @@ The project SHALL provide a `README.md` at the repository root with comprehensiv
 
 - **WHEN** a developer reads `README.md`
 - **THEN** it SHALL contain installation instructions showing `dotnet add package CSharpAcdc`
-- **AND** it SHALL specify the minimum required .NET version (net8.0)
+- **AND** it SHALL specify the minimum required .NET version (net10.0)
 
 #### Scenario: Quick start demonstrates zero-config usage
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of Dart-ACDC. No C# code exists yet. This proposal establishes the solution structure, build configuration, and dependency management patterns that all subsequent proposals (P2 through P11) will build upon. The project expects 10+ parallel feature branches, making merge conflict prevention a first-class concern.
+CSharp-ACDC is a green-field .NET 10 class library — a server-only C# port of Dart-ACDC. No C# code exists yet. This proposal establishes the solution structure, build configuration, and dependency management patterns that all subsequent proposals (P2 through P11) will build upon. The project expects 10+ parallel feature branches, making merge conflict prevention a first-class concern.
 
 ## Goals
 
@@ -33,7 +33,7 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 ### 2. `Directory.Build.props` for Shared Build Settings
 
-**Decision:** Use `Directory.Build.props` at the solution root to set `TargetFramework`, `LangVersion`, `Nullable`, `ImplicitUsings`, `TreatWarningsAsErrors`, and `EnforceCodeStyleInBuild`. `LangVersion` is explicitly set to `12` even though .NET 8 defaults to C# 12, to prevent drift if the SDK version changes. `EnforceCodeStyleInBuild` is set to `true` so that `.editorconfig` style rules are evaluated by Roslyn analyzers during `dotnet build`, not only in IDEs.
+**Decision:** Use `Directory.Build.props` at the solution root to set `TargetFramework`, `LangVersion`, `Nullable`, `ImplicitUsings`, `TreatWarningsAsErrors`, and `EnforceCodeStyleInBuild`. `LangVersion` is explicitly set to `14` even though .NET 10 defaults to C# 14, to prevent drift if the SDK version changes. `EnforceCodeStyleInBuild` is set to `true` so that `.editorconfig` style rules are evaluated by Roslyn analyzers during `dotnet build`, not only in IDEs.
 
 **Why:** Avoids duplicating settings across three `.csproj` files. Any new projects added later automatically inherit these settings. Changes to the target framework or language version happen in one place. Without `EnforceCodeStyleInBuild`, `.editorconfig` rules are advisory during CLI builds — CI would never catch style violations.
 
@@ -68,7 +68,7 @@ CSharp-ACDC is a green-field .NET 8 class library — a server-only C# port of D
 
 ### 7. `global.json` for SDK Version Pinning
 
-**Decision:** Pin the .NET 8 SDK version via `global.json` with a `latestFeature` rollForward policy.
+**Decision:** Pin the .NET 10 SDK version via `global.json` with a `latestFeature` rollForward policy.
 
 **Why:** Ensures all developers and CI systems use the same major SDK version while allowing automatic adoption of patch-level updates within that feature band. Prevents "works on my machine" issues from SDK version differences.
 

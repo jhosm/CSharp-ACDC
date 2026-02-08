@@ -8,10 +8,10 @@ The CSharp-ACDC library needs a .NET solution structure before any code can be w
 
 - **`.gitignore`** — Git ignore rules for .NET build artifacts, IDE files, and local-only files (`.claude/settings.local.json`, `.env`, etc.)
 - **`CSharp-ACDC.sln`** — Solution file organizing source and test projects into `src` and `tests` solution folders
-- **`src/CSharpAcdc/CSharpAcdc.csproj`** — net8.0 class library with nullable enabled and all NuGet package references
+- **`src/CSharpAcdc/CSharpAcdc.csproj`** — net10.0 class library with nullable enabled and all NuGet package references
 - **`tests/CSharpAcdc.Tests/CSharpAcdc.Tests.csproj`** — xUnit unit test project with NSubstitute, FluentAssertions, MockHttp, and all test packages
 - **`tests/CSharpAcdc.IntegrationTests/CSharpAcdc.IntegrationTests.csproj`** — Integration test project for WireMock.Net tests requiring longer timeouts
-- **`Directory.Build.props`** — Shared build settings (TFM net8.0, C# 12, nullable enabled, implicit usings, TreatWarningsAsErrors)
+- **`Directory.Build.props`** — Shared build settings (TFM net10.0, C# 14, nullable enabled, implicit usings, TreatWarningsAsErrors)
 - **`Directory.Packages.props`** — Central package version management for all NuGet dependencies
 - **`.editorconfig`** — Code style rules matching project conventions (file-scoped namespaces, etc.)
 - **`global.json`** — .NET SDK version pin for reproducible builds

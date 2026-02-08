@@ -51,7 +51,7 @@
 - **AND** the exception `StatusCode` SHALL be `HttpStatusCode.ServiceUnavailable`
 
 ### Requirement: Network Error Mapping
-`ErrorHandler` SHALL catch `HttpRequestException` thrown by the downstream pipeline and convert it to `AcdcNetworkException` with the appropriate `NetworkErrorType` based on .NET 8's `HttpRequestError` property.
+`ErrorHandler` SHALL catch `HttpRequestException` thrown by the downstream pipeline and convert it to `AcdcNetworkException` with the appropriate `NetworkErrorType` based on the `HttpRequestError` property.
 
 #### Scenario: DNS resolution failure
 - **WHEN** the downstream pipeline throws an `HttpRequestException` with `HttpRequestError.NameResolutionError`

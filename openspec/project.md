@@ -1,10 +1,10 @@
 # Project Context
 
 ## Purpose
-CSharp-ACDC is a **server-only** C# port of Dart-ACDC — a production HTTP client library providing authentication, caching, logging, and structured error handling. It targets ASP.NET Core / .NET 8+ server environments.
+CSharp-ACDC is a **server-only** C# port of Dart-ACDC — a production HTTP client library providing authentication, caching, logging, and structured error handling. It targets ASP.NET Core / .NET 10 server environments.
 
 ## Tech Stack
-- C# 12, .NET 8+, ASP.NET Core
+- C# 14, .NET 10, ASP.NET Core
 - `IHttpClientFactory` with `DelegatingHandler` pipeline
 - FusionCache (`IMemoryCache` L1 + `IDistributedCache` Redis L2)
 - `System.IdentityModel.Tokens.Jwt` for JWT handling

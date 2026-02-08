@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Continuous Integration
-The CI workflow SHALL build the solution with warnings-as-errors and run all unit tests on every push to `main` and on every pull request. The workflow SHALL use .NET 8 on ubuntu-latest and SHALL restore dependencies before building.
+The CI workflow SHALL build the solution with warnings-as-errors and run all unit tests on every push to `main` and on every pull request. The workflow SHALL use .NET 10 on ubuntu-latest and SHALL restore dependencies before building.
 
 #### Scenario: PR triggers CI build and tests
 - **WHEN** a pull request is opened or updated against `main`

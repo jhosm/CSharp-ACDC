@@ -1,7 +1,7 @@
 ## 1. CI Workflow
 - [ ] 1.1 Create `.github/workflows/ci.yml`
 - [ ] 1.2 Configure trigger on push to main and PRs
-- [ ] 1.3 Add .NET 8 setup and NuGet cache
+- [ ] 1.3 Add .NET 10 setup and NuGet cache
 - [ ] 1.4 Add build step with TreatWarningsAsErrors
 - [ ] 1.5 Add unit test step with coverage collection
 - [ ] 1.6 Add integration test step

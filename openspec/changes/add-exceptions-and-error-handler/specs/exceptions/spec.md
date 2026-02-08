@@ -115,7 +115,7 @@ It SHALL provide the following methods:
 - **THEN** the `StatusCode` SHALL be `HttpStatusCode.ServiceUnavailable`
 
 ### Requirement: Network Exception
-`AcdcNetworkException` SHALL extend `AcdcException` and classify network failures using the `NetworkErrorType` enum. It SHALL provide a mapping from .NET 8's `HttpRequestException.HttpRequestError` to `NetworkErrorType`.
+`AcdcNetworkException` SHALL extend `AcdcException` and classify network failures using the `NetworkErrorType` enum. It SHALL provide a mapping from `HttpRequestException.HttpRequestError` to `NetworkErrorType`.
 
 #### Scenario: DNS resolution failure
 - **WHEN** an `HttpRequestException` with `HttpRequestError.NameResolutionError` is caught

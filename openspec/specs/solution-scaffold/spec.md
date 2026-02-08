@@ -1,7 +1,8 @@
-# Capability: Solution Scaffold
+# solution-scaffold Specification
 
-## ADDED Requirements
-
+## Purpose
+TBD - created by archiving change add-solution-scaffold. Update Purpose after archive.
+## Requirements
 ### Requirement: Git Ignore Rules
 
 The project SHALL include a `.gitignore` file at the repository root that prevents build artifacts, IDE files, and local-only files from being committed to version control.
@@ -43,10 +44,10 @@ The project SHALL provide a .NET solution file (`CSharp-ACDC.sln`) that organize
 - **THEN** the library project SHALL appear under a `src` solution folder
 - **AND** both test projects SHALL appear under a `tests` solution folder
 
-#### Scenario: Library project targets net8.0
+#### Scenario: Library project targets net10.0
 
 - **WHEN** the library project `CSharpAcdc.csproj` is inspected
-- **THEN** it SHALL target `net8.0`
+- **THEN** it SHALL target `net10.0`
 - **AND** it SHALL have `OutputType` of `Library` (default)
 
 #### Scenario: Test projects reference the library
@@ -90,7 +91,7 @@ The project SHALL use `Directory.Build.props` for shared build settings. All pro
 #### Scenario: C# language version is set
 
 - **WHEN** `Directory.Build.props` is inspected
-- **THEN** it SHALL set `<LangVersion>12</LangVersion>` to explicitly target C# 12
+- **THEN** it SHALL set `<LangVersion>14</LangVersion>` to explicitly target C# 14
 
 #### Scenario: Nullable reference types are enabled
 
@@ -112,10 +113,10 @@ The project SHALL use `Directory.Build.props` for shared build settings. All pro
 - **WHEN** `Directory.Build.props` is inspected
 - **THEN** it SHALL set `<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>` so that `.editorconfig` style rules are evaluated during `dotnet build`, not only in IDEs
 
-#### Scenario: Target framework is net8.0
+#### Scenario: Target framework is net10.0
 
 - **WHEN** `Directory.Build.props` is inspected
-- **THEN** it SHALL set `<TargetFramework>net8.0</TargetFramework>` as the default for all projects
+- **THEN** it SHALL set `<TargetFramework>net10.0</TargetFramework>` as the default for all projects
 
 ---
 
@@ -126,7 +127,7 @@ The project SHALL pin the .NET SDK version via a `global.json` file at the solut
 #### Scenario: global.json specifies SDK version
 
 - **WHEN** `global.json` is inspected
-- **THEN** it SHALL specify a `sdk.version` targeting .NET 8 (e.g., `8.0.xxx`)
+- **THEN** it SHALL specify a `sdk.version` targeting .NET 10 (e.g., `10.0.xxx`)
 - **AND** it SHALL specify a `rollForward` policy of `latestFeature` to allow patch-level updates within the feature band
 
 #### Scenario: SDK version is respected by dotnet CLI
@@ -138,7 +139,7 @@ The project SHALL pin the .NET SDK version via a `global.json` file at the solut
 
 ### Requirement: Code Style
 
-The project SHALL enforce code style conventions via an `.editorconfig` file at the solution root. The style rules MUST match the conventions documented in the project (file-scoped namespaces, C# 12 features).
+The project SHALL enforce code style conventions via an `.editorconfig` file at the solution root. The style rules MUST match the conventions documented in the project (file-scoped namespaces, C# 14 features).
 
 #### Scenario: File-scoped namespaces are enforced
 
@@ -196,3 +197,4 @@ The solution SHALL include separate unit test and integration test projects. Bot
 
 - **WHEN** `dotnet test` is run on the solution with no test classes present
 - **THEN** the command SHALL complete without error (exit code 0 with no test assemblies discovered is acceptable)
+
