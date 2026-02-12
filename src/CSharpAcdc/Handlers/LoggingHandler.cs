@@ -9,7 +9,7 @@ namespace CSharpAcdc.Handlers;
 
 public class LoggingHandler : DelegatingHandler
 {
-    private static readonly AsyncLocal<bool> IsLogging = new();
+    private static readonly AsyncLocal<bool> _isLogging = new();
 
     private readonly ILogger<LoggingHandler> _logger;
     private readonly AcdcLoggingOptions _options;
@@ -17,6 +17,8 @@ public class LoggingHandler : DelegatingHandler
 
     public LoggingHandler(ILogger<LoggingHandler> logger, IOptions<AcdcLoggingOptions> options)
     {
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(options);
         _logger = logger;
         _options = options.Value;
         _redactor = new SensitiveDataRedactor(_options);
@@ -29,14 +31,14 @@ public class LoggingHandler : DelegatingHandler
         if (ShouldSkip(request))
             return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
-        IsLogging.Value = true;
+        _isLogging.Value = true;
         try
         {
             return await SendWithLoggingAsync(request, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            IsLogging.Value = false;
+            _isLogging.Value = false;
         }
     }
 
@@ -44,22 +46,50 @@ public class LoggingHandler : DelegatingHandler
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        var redactedUrl = _redactor.RedactUrl(request.RequestUri);
-        var redactedHeaders = _redactor.RedactHeaders(request.Headers);
+        // Compute redacted URL once, before any try/catch, so it's available for error logging
+        string redactedUrl;
+        try
+        {
+            redactedUrl = _redactor.RedactUrl(request.RequestUri);
+        }
+        catch
+        {
+            redactedUrl = request.RequestUri?.AbsolutePath ?? "[unknown]";
+        }
 
-        _logger.LogInformation(
-            "HTTP {Method} {Url} Headers: {Headers}",
-            request.Method,
-            redactedUrl,
-            redactedHeaders);
+        try
+        {
+            var redactedHeaders = _redactor.RedactHeaders(request.Headers);
 
-        WarnIfLargeRequestBody(request, redactedUrl);
+            _logger.LogInformation(
+                "HTTP {Method} {Url} Headers: {Headers}",
+                request.Method,
+                redactedUrl,
+                redactedHeaders);
+
+            WarnIfLargeRequestBody(request, redactedUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to log request details");
+        }
 
         var stopwatch = Stopwatch.StartNew();
         HttpResponseMessage response;
         try
         {
             response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            stopwatch.Stop();
+            _logger.LogInformation(
+                ex,
+                "HTTP {Method} {Url} cancelled after {ElapsedMs}ms",
+                request.Method,
+                redactedUrl,
+                stopwatch.ElapsedMilliseconds);
+            throw;
         }
         catch (Exception ex)
         {
@@ -74,28 +104,36 @@ public class LoggingHandler : DelegatingHandler
         }
 
         stopwatch.Stop();
-        var elapsedMs = stopwatch.ElapsedMilliseconds;
-        var redactedResponseHeaders = _redactor.RedactHeaders(response.Headers);
 
-        _logger.LogInformation(
-            "HTTP {Method} {Url} responded {StatusCode} in {ElapsedMs}ms Headers: {Headers}",
-            request.Method,
-            redactedUrl,
-            (int)response.StatusCode,
-            elapsedMs,
-            redactedResponseHeaders);
-
-        if (stopwatch.Elapsed >= _options.SlowRequestThreshold)
+        try
         {
-            _logger.LogWarning(
-                "Slow request: {Method} {Url} took {ElapsedMs}ms (threshold: {ThresholdMs}ms)",
+            var elapsedMs = stopwatch.ElapsedMilliseconds;
+            var redactedResponseHeaders = _redactor.RedactHeaders(response.Headers);
+
+            _logger.LogInformation(
+                "HTTP {Method} {Url} responded {StatusCode} in {ElapsedMs}ms Headers: {Headers}",
                 request.Method,
                 redactedUrl,
+                (int)response.StatusCode,
                 elapsedMs,
-                (long)_options.SlowRequestThreshold.TotalMilliseconds);
-        }
+                redactedResponseHeaders);
 
-        WarnIfLargeResponseBody(response, request.Method, redactedUrl);
+            if (stopwatch.Elapsed >= _options.SlowRequestThreshold)
+            {
+                _logger.LogWarning(
+                    "Slow request: {Method} {Url} took {ElapsedMs}ms (threshold: {ThresholdMs}ms)",
+                    request.Method,
+                    redactedUrl,
+                    elapsedMs,
+                    (long)_options.SlowRequestThreshold.TotalMilliseconds);
+            }
+
+            WarnIfLargeResponseBody(response, request.Method, redactedUrl);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to log response details");
+        }
 
         return response;
     }
@@ -116,7 +154,7 @@ public class LoggingHandler : DelegatingHandler
 
     private void WarnIfLargeResponseBody(HttpResponseMessage response, HttpMethod method, string redactedUrl)
     {
-        var contentLength = response.Content.Headers.ContentLength;
+        var contentLength = response.Content?.Headers.ContentLength;
         if (contentLength > _options.LargePayloadThreshold)
         {
             _logger.LogWarning(
@@ -130,7 +168,7 @@ public class LoggingHandler : DelegatingHandler
 
     private bool ShouldSkip(HttpRequestMessage request)
     {
-        if (IsLogging.Value)
+        if (_isLogging.Value)
             return true;
 
         if (request.Options.TryGetValue(AcdcRequestOptions.SkipLogging, out var skip) && skip)

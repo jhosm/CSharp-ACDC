@@ -7,11 +7,12 @@ namespace CSharpAcdc.Logging;
 public class SensitiveDataRedactor
 {
     private const string Redacted = "[REDACTED]";
-    private readonly IReadOnlySet<string> _sensitiveFields;
+    private readonly HashSet<string> _sensitiveFields;
 
     public SensitiveDataRedactor(AcdcLoggingOptions options)
     {
-        _sensitiveFields = options.SensitiveFields;
+        ArgumentNullException.ThrowIfNull(options);
+        _sensitiveFields = new HashSet<string>(options.SensitiveFields, StringComparer.OrdinalIgnoreCase);
     }
 
     public Dictionary<string, string> RedactHeaders(IEnumerable<KeyValuePair<string, IEnumerable<string>>> headers)
@@ -43,9 +44,24 @@ public class SensitiveDataRedactor
             if (name is null)
                 continue;
 
-            redactedParts.Add(IsSensitive(name)
-                ? $"{Uri.EscapeDataString(name)}={Redacted}"
-                : $"{Uri.EscapeDataString(name)}={Uri.EscapeDataString(query[name] ?? string.Empty)}");
+            var escapedName = Uri.EscapeDataString(name);
+            var values = query.GetValues(name);
+
+            if (IsSensitive(name))
+            {
+                var count = values?.Length ?? 1;
+                for (var i = 0; i < count; i++)
+                    redactedParts.Add($"{escapedName}={Redacted}");
+            }
+            else if (values is not null)
+            {
+                foreach (var value in values)
+                    redactedParts.Add($"{escapedName}={Uri.EscapeDataString(value ?? string.Empty)}");
+            }
+            else
+            {
+                redactedParts.Add($"{escapedName}=");
+            }
         }
 
         var builder = new UriBuilder(uri) { Query = string.Join("&", redactedParts) };
@@ -70,7 +86,7 @@ public class SensitiveDataRedactor
         }
         catch (JsonException)
         {
-            return body; // Not valid JSON — return as-is
+            return "[non-JSON body, redaction skipped]";
         }
     }
 

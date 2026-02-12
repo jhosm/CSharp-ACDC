@@ -1,12 +1,10 @@
 using System.Net;
-using System.Net.Http.Headers;
 using CSharpAcdc.Configuration;
 using CSharpAcdc.Extensions;
 using CSharpAcdc.Handlers;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using NSubstitute;
 using RichardSzalay.MockHttp;
 using Xunit;
 
@@ -67,7 +65,7 @@ public class LoggingHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(mockHandler);
-        var request = new HttpRequestMessage(HttpMethod.Get, "/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/test");
         request.Headers.Add("Authorization", "Bearer secret-token-123");
         request.Headers.Add("X-Request-Id", "abc-123");
 
@@ -88,8 +86,6 @@ public class LoggingHandlerTests
     [InlineData("X-Api-Key", "key123")]
     public void SensitiveHeaders_DefaultFields_Redacted(string headerName, string headerValue)
     {
-        // The redaction is tested directly through the redactor since not all
-        // headers can be added to HttpRequestMessage.Headers
         var redactor = new CSharpAcdc.Logging.SensitiveDataRedactor(new AcdcLoggingOptions());
         var headers = new Dictionary<string, IEnumerable<string>>
         {
@@ -117,7 +113,7 @@ public class LoggingHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(mockHandler, options);
-        var request = new HttpRequestMessage(HttpMethod.Get, "/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/test");
         request.Headers.Add("X-Custom-Secret", "my-secret");
 
         await client.SendAsync(request);
@@ -191,7 +187,7 @@ public class LoggingHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(mockHandler, options);
-        var content = new StringContent(new string('x', 200));
+        using var content = new StringContent(new string('x', 200));
         await client.PostAsync("/upload", content);
 
         _logger.Entries.Should().Contain(e =>
@@ -235,7 +231,6 @@ public class LoggingHandlerTests
     [Fact]
     public async Task ReentrancyPrevention_NestedRequestSkipsLogging()
     {
-        // The inner handler triggers a nested HTTP request within the same async context
         var nestedHandler = new NestedRequestHandler();
         var opts = Options.Create(_options);
         var loggingHandler = new LoggingHandler(_logger, opts)
@@ -254,9 +249,12 @@ public class LoggingHandlerTests
             .Where(e => e.Level == LogLevel.Information && e.Message.Contains("GET"))
             .ToList();
 
-        // Should see request + response logs for outer, but not for inner
         infoLogs.Should().AllSatisfy(e => e.Message.Should().Contain("/outer"));
         infoLogs.Should().NotContain(e => e.Message.Contains("/inner"));
+
+        // The nested handler's inner logger should also have no entries,
+        // confirming the reentrancy guard suppressed logging entirely
+        nestedHandler.InnerLogger.Entries.Should().BeEmpty();
     }
 
     [Fact]
@@ -266,7 +264,7 @@ public class LoggingHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(mockHandler);
-        var request = new HttpRequestMessage(HttpMethod.Get, "/silent");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/silent");
         request.Options.Set(AcdcRequestOptions.SkipLogging, true);
 
         await client.SendAsync(request);
@@ -308,6 +306,29 @@ public class LoggingHandlerTests
     }
 
     [Fact]
+    public async Task CancellationLogging_LogsAtInformationLevel()
+    {
+        using var cts = new CancellationTokenSource();
+        using var mockHandler = new MockHttpMessageHandler();
+        mockHandler.When("*").Respond(async _ =>
+        {
+            await cts.CancelAsync();
+            cts.Token.ThrowIfCancellationRequested();
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        using var client = CreateClient(mockHandler);
+        var act = () => client.GetAsync("/cancel", cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+
+        _logger.Entries.Should().NotContain(e => e.Level == LogLevel.Error);
+        _logger.Entries.Should().Contain(e =>
+            e.Level == LogLevel.Information &&
+            e.Message.Contains("cancelled"));
+    }
+
+    [Fact]
     public async Task ResponseHeaders_SensitiveOnesRedacted()
     {
         using var mockHandler = new MockHttpMessageHandler();
@@ -315,6 +336,7 @@ public class LoggingHandlerTests
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK);
             response.Headers.Add("X-Request-Id", "visible-id");
+            response.Headers.Add("X-Api-Key", "secret-api-key");
             return response;
         });
 
@@ -327,48 +349,89 @@ public class LoggingHandlerTests
 
         responseLogs.Should().ContainSingle();
         responseLogs[0].Message.Should().Contain("visible-id");
+        responseLogs[0].Message.Should().Contain("[REDACTED]");
+        responseLogs[0].Message.Should().NotContain("secret-api-key");
+    }
+
+    [Fact]
+    public async Task AsyncLocal_ResetsAfterError()
+    {
+        using var mockHandler = new MockHttpMessageHandler();
+        mockHandler.When("/fail").Throw(new HttpRequestException("Boom"));
+        mockHandler.When("/success").Respond(HttpStatusCode.OK);
+
+        using var client = CreateClient(mockHandler);
+
+        // First request fails
+        var act = () => client.GetAsync("/fail");
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        // Second request should still be logged (AsyncLocal reset to false)
+        await client.GetAsync("/success");
+
+        _logger.Entries.Should().Contain(e =>
+            e.Level == LogLevel.Information &&
+            e.Message.Contains("/success"));
+    }
+
+    [Fact]
+    public async Task ConcurrentRequests_LogIndependently()
+    {
+        using var mockHandler = new MockHttpMessageHandler();
+        mockHandler.When("*").Respond(async _ =>
+        {
+            await Task.Delay(10);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        using var client = CreateClient(mockHandler);
+
+        var tasks = Enumerable.Range(0, 5)
+            .Select(i => client.GetAsync($"/concurrent-{i}"))
+            .ToList();
+
+        await Task.WhenAll(tasks);
+
+        // Each request should produce at least a request and response log
+        for (var i = 0; i < 5; i++)
+        {
+            var index = i;
+            _logger.Entries.Should().Contain(e =>
+                e.Level == LogLevel.Information &&
+                e.Message.Contains($"/concurrent-{index}"));
+        }
     }
 
     /// <summary>
-    /// A handler that simulates a nested HTTP call within the same async context.
-    /// It creates a new LoggingHandler-wrapped client and makes a call from within SendAsync,
+    /// A handler that simulates a nested HTTP call within the same async context,
     /// testing the AsyncLocal reentrancy guard.
     /// </summary>
     private sealed class NestedRequestHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(
+        public FakeLogger<LoggingHandler> InnerLogger { get; } = new();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            // The reentrancy check happens in LoggingHandler. Since we're inside the
-            // outer LoggingHandler's SendAsync, the AsyncLocal<bool> IsLogging is true.
-            // We simulate the inner handler returning without actually nesting a second
-            // LoggingHandler (which would require constructing one and calling it).
-            // Instead, we validate that the flag is visible by checking it indirectly
-            // through the test's log count.
-
-            // But for a proper test, we actually construct an inner pipeline:
             var innerMock = new MockHttpMessageHandler();
             innerMock.When("*").Respond(HttpStatusCode.OK);
 
-            // Create an inner LoggingHandler that shares the same AsyncLocal context
-            var innerLogger = new FakeLogger<LoggingHandler>();
             var innerOpts = Options.Create(new AcdcLoggingOptions());
-            var innerLogging = new LoggingHandler(innerLogger, innerOpts)
+            var innerLogging = new LoggingHandler(InnerLogger, innerOpts)
             {
                 InnerHandler = innerMock,
             };
 
-            // The nested call happens within the same async context
             using var innerClient = new HttpClient(innerLogging)
             {
                 BaseAddress = new Uri("https://api.example.com"),
             };
 
-            // This should be skipped by reentrancy guard
-            _ = innerClient.GetAsync("/inner", cancellationToken).GetAwaiter().GetResult();
+            // Use await instead of .GetAwaiter().GetResult() to avoid deadlocks
+            await innerClient.GetAsync("/inner", cancellationToken).ConfigureAwait(false);
 
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }
