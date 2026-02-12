@@ -195,13 +195,13 @@ public class SensitiveDataRedactorTests
     }
 
     [Fact]
-    public void RedactJsonBody_InvalidJson_ReturnsOriginal()
+    public void RedactJsonBody_InvalidJson_ReturnsPlaceholder()
     {
         var redactor = CreateRedactor();
 
         var result = redactor.RedactJsonBody("not json at all");
 
-        result.Should().Be("not json at all");
+        result.Should().Be("[non-JSON body, redaction skipped]");
     }
 
     [Fact]

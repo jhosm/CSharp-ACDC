@@ -1,12 +1,16 @@
+using System.Collections.Frozen;
+
 namespace CSharpAcdc.Configuration;
 
-public class AcdcLoggingOptions
+public record AcdcLoggingOptions
 {
     public TimeSpan SlowRequestThreshold { get; set; } = TimeSpan.FromSeconds(3);
 
     public long LargePayloadThreshold { get; set; } = 1_048_576; // 1 MiB
 
-    public IReadOnlySet<string> SensitiveFields { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    public IReadOnlySet<string> SensitiveFields { get; set; } = DefaultSensitiveFields;
+
+    public static readonly IReadOnlySet<string> DefaultSensitiveFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "Authorization",
         "Cookie",
@@ -24,5 +28,5 @@ public class AcdcLoggingOptions
         "private_key",
         "session_id",
         "x-csrf-token",
-    };
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 }
