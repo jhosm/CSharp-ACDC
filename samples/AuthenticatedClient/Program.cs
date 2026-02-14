@@ -1,5 +1,6 @@
 using CSharpAcdc.Auth;
 using CSharpAcdc.Client;
+using CSharpAcdc.Exceptions;
 using CSharpAcdc.Extensions;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -30,12 +31,27 @@ await tokenProvider.SaveTokensAsync(
     DateTimeOffset.UtcNow.AddHours(1),
     CancellationToken.None);
 
-// Make an authenticated request — the Bearer token is injected automatically
 var client = sp.GetRequiredService<AcdcHttpClient>();
-var response = await client.GetAsync("/api/protected-resource");
 
-Console.WriteLine($"Status: {response.StatusCode}");
+try
+{
+    // Make an authenticated request — the Bearer token is injected automatically
+    var response = await client.GetAsync("/api/protected-resource");
+    Console.WriteLine($"Status: {response.StatusCode}");
 
-// Logout clears tokens and optionally revokes on the server
-await client.Auth!.LogoutAsync(CancellationToken.None);
-Console.WriteLine("Logged out");
+    // Logout clears tokens and optionally revokes on the server
+    await client.Auth!.LogoutAsync(CancellationToken.None);
+    Console.WriteLine("Logged out");
+}
+catch (AcdcAuthException ex)
+{
+    Console.WriteLine($"Auth error: {ex.Message} (status: {ex.StatusCode})");
+}
+catch (AcdcNetworkException ex)
+{
+    Console.WriteLine($"Network error: {ex.NetworkErrorType} — {ex.Message}");
+}
+catch (AcdcException ex)
+{
+    Console.WriteLine($"Request error: {ex.Message}");
+}
