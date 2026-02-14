@@ -14,6 +14,7 @@ public class CacheHandlerSwrTests : IDisposable
 {
     private readonly FusionCache _fusionCache = new(new FusionCacheOptions());
     private readonly AcdcCacheManager _cacheManager;
+    private readonly List<IDisposable> _disposables = [];
 
     public CacheHandlerSwrTests()
     {
@@ -22,6 +23,8 @@ public class CacheHandlerSwrTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var d in _disposables)
+            d.Dispose();
         _fusionCache.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -38,6 +41,8 @@ public class CacheHandlerSwrTests : IDisposable
             InnerHandler = new StubHandler(responseFactory),
         };
         var client = new HttpClient(handler);
+        _disposables.Add(handler);
+        _disposables.Add(client);
         return (handler, client);
     }
 
@@ -51,8 +56,8 @@ public class CacheHandlerSwrTests : IDisposable
             Interlocked.Increment(ref callCount);
             if (callCount > 1)
             {
-                // Simulate slow factory on subsequent calls
-                await Task.Delay(TimeSpan.FromSeconds(5), ct);
+                // Simulate slow factory exceeding FactorySoftTimeout
+                await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
             }
 
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -67,16 +72,16 @@ public class CacheHandlerSwrTests : IDisposable
             AllowTimedOutFactoryBackgroundCompletion = true,
         });
 
-        // First call — populate cache
-        var response1 = await client.GetAsync("https://api.example.com/data");
+        // First call -- populate cache
+        using var response1 = await client.GetAsync("https://api.example.com/data");
         var content1 = await response1.Content.ReadAsStringAsync();
         content1.Should().Be("data-1");
 
         // Wait for cache to expire
         await Task.Delay(50);
 
-        // Second call — factory is slow, should get stale data via fail-safe
-        var response2 = await client.GetAsync("https://api.example.com/data");
+        // Second call -- factory is slow, should get stale data via fail-safe
+        using var response2 = await client.GetAsync("https://api.example.com/data");
         var content2 = await response2.Content.ReadAsStringAsync();
         content2.Should().Be("data-1"); // Stale data returned quickly
     }
@@ -104,16 +109,16 @@ public class CacheHandlerSwrTests : IDisposable
             FailSafeMaxDuration = TimeSpan.FromHours(1),
         });
 
-        // First call — populate cache
-        var response1 = await client.GetAsync("https://api.example.com/data");
+        // First call -- populate cache
+        using var response1 = await client.GetAsync("https://api.example.com/data");
         var content1 = await response1.Content.ReadAsStringAsync();
         content1.Should().Be("original-data");
 
         // Wait for cache to expire
         await Task.Delay(50);
 
-        // Second call — factory throws, should get stale data via fail-safe
-        var response2 = await client.GetAsync("https://api.example.com/data");
+        // Second call -- factory throws, should get stale data via fail-safe
+        using var response2 = await client.GetAsync("https://api.example.com/data");
         var content2 = await response2.Content.ReadAsStringAsync();
         content2.Should().Be("original-data");
     }
@@ -138,23 +143,16 @@ public class CacheHandlerSwrTests : IDisposable
         }, new AcdcCacheOptions
         {
             Duration = TimeSpan.FromMilliseconds(1),
-            // FailSafeMaxDuration is null — fail-safe is disabled
+            // FailSafeMaxDuration is null -- fail-safe is disabled
         });
 
-        // First call — populate cache
-        await client.GetAsync("https://api.example.com/data");
+        // First call -- populate cache
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
 
         // Wait for cache to expire
         await Task.Delay(50);
 
-        // Second call — factory throws, no fail-safe, error should propagate
-        // The CacheHandler catches non-AcdcCacheException errors and falls through,
-        // which means it calls base.SendAsync again (the stub), which throws.
-        // But since the error is caught by CacheHandler's outer catch and it
-        // tries to call base.SendAsync as fallback — which is the factory itself.
-        // Actually the CacheHandler's outer catch calls base.SendAsync on the inner handler.
-        // Let's verify the behavior: the cache operation fails, and the handler
-        // falls through to downstream which also throws.
+        // Second call -- factory throws and, with fail-safe disabled, the exception should propagate to the caller.
         var act = () => client.GetAsync("https://api.example.com/data");
         await act.Should().ThrowAsync<HttpRequestException>();
     }
