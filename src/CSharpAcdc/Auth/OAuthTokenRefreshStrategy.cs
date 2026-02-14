@@ -45,7 +45,7 @@ public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
             HandleErrorResponse(response.StatusCode, responseBody);
         }
 
-        return ParseSuccessResponse(responseBody);
+        return ParseSuccessResponse(responseBody, refreshToken);
     }
 
     private static void HandleErrorResponse(HttpStatusCode statusCode, string responseBody)
@@ -77,7 +77,7 @@ public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
             statusCode);
     }
 
-    private static TokenRefreshResult ParseSuccessResponse(string responseBody)
+    private static TokenRefreshResult ParseSuccessResponse(string responseBody, string inputRefreshToken)
     {
         using var doc = JsonDocument.Parse(responseBody);
         var root = doc.RootElement;
@@ -85,8 +85,11 @@ public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
         var accessToken = root.GetProperty("access_token").GetString()
             ?? throw new InvalidOperationException("Missing access_token in refresh response");
 
-        var newRefreshToken = root.GetProperty("refresh_token").GetString()
-            ?? throw new InvalidOperationException("Missing refresh_token in refresh response");
+        // Many OAuth providers omit refresh_token when rotation is disabled —
+        // fall back to the input token so the caller can keep using it.
+        var newRefreshToken = root.TryGetProperty("refresh_token", out var rtElement)
+            ? rtElement.GetString() ?? inputRefreshToken
+            : inputRefreshToken;
 
         var expiresAt = ParseExpiry(root);
 
@@ -103,17 +106,21 @@ public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
                 return DateTimeOffset.UtcNow.AddSeconds(seconds);
             }
 
-            // Try RFC 1123 date format (fixes Dart bug)
+            // String value — try numeric string first (e.g., "3600" from some providers),
+            // then RFC 1123 date format (fixes Dart bug).
             var expiresInStr = expiresInElement.GetString();
-            if (expiresInStr is not null &&
-                DateTimeOffset.TryParseExact(
-                    expiresInStr,
-                    "R",
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.None,
-                    out var parsedDate))
+            if (expiresInStr is not null)
             {
-                return parsedDate;
+                if (int.TryParse(expiresInStr, NumberStyles.None, CultureInfo.InvariantCulture, out var numericSeconds))
+                    return DateTimeOffset.UtcNow.AddSeconds(numericSeconds);
+
+                if (DateTimeOffset.TryParseExact(
+                        expiresInStr,
+                        "R",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out var parsedDate))
+                    return parsedDate;
             }
         }
 

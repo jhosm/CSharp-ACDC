@@ -5,71 +5,42 @@ public sealed class BackoffManager
     private static readonly TimeSpan BaseDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MaxDelay = TimeSpan.FromSeconds(30);
 
-    private readonly SemaphoreSlim _semaphore = new(1, 1);
     private int _attempt;
 
     public async Task WaitIfNeededAsync(CancellationToken ct)
     {
-        TimeSpan delay;
+        var attempt = Volatile.Read(ref _attempt);
+        if (attempt == 0)
+            return;
 
-        await _semaphore.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            if (_attempt == 0)
-                return;
+        var rawMs = BaseDelay.TotalMilliseconds * Math.Pow(2, attempt - 1);
+        var clampedMs = Math.Min(rawMs, MaxDelay.TotalMilliseconds);
 
-            var rawMs = BaseDelay.TotalMilliseconds * Math.Pow(2, _attempt - 1);
-            var clampedMs = Math.Min(rawMs, MaxDelay.TotalMilliseconds);
-
-            // +/-10% jitter
-            var jitterFactor = 0.9 + (Random.Shared.NextDouble() * 0.2);
-            delay = TimeSpan.FromMilliseconds(clampedMs * jitterFactor);
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        // +/-10% jitter
+        var jitterFactor = 0.9 + (Random.Shared.NextDouble() * 0.2);
+        var delay = TimeSpan.FromMilliseconds(clampedMs * jitterFactor);
 
         await Task.Delay(delay, ct).ConfigureAwait(false);
     }
 
-    public async Task RecordFailureAsync(CancellationToken ct = default)
+    public Task RecordFailureAsync(CancellationToken ct = default)
     {
-        await _semaphore.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            _attempt++;
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        ct.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _attempt);
+        return Task.CompletedTask;
     }
 
-    public async Task ResetAsync(CancellationToken ct = default)
+    public Task ResetAsync(CancellationToken ct = default)
     {
-        await _semaphore.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            _attempt = 0;
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        ct.ThrowIfCancellationRequested();
+        Interlocked.Exchange(ref _attempt, 0);
+        return Task.CompletedTask;
     }
 
     // Expose for testing
-    internal async Task<int> GetAttemptAsync(CancellationToken ct = default)
+    internal Task<int> GetAttemptAsync(CancellationToken ct = default)
     {
-        await _semaphore.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            return _attempt;
-        }
-        finally
-        {
-            _semaphore.Release();
-        }
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(Volatile.Read(ref _attempt));
     }
 }

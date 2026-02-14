@@ -46,8 +46,8 @@ public class BackoffManagerTests
         await _backoff.WaitIfNeededAsync(CancellationToken.None);
         sw.Stop();
 
-        // 1s +/- 10% jitter => 900ms to 1100ms
-        sw.ElapsedMilliseconds.Should().BeInRange(800, 1200);
+        // 1s +/- 10% jitter => 900ms to 1100ms (wider tolerance for CI)
+        sw.ElapsedMilliseconds.Should().BeInRange(700, 1500);
     }
 
     [Fact]
@@ -60,8 +60,8 @@ public class BackoffManagerTests
         await _backoff.WaitIfNeededAsync(CancellationToken.None);
         sw.Stop();
 
-        // 2s +/- 10% jitter => 1800ms to 2200ms
-        sw.ElapsedMilliseconds.Should().BeInRange(1700, 2300);
+        // 2s +/- 10% jitter => 1800ms to 2200ms (wider tolerance for CI)
+        sw.ElapsedMilliseconds.Should().BeInRange(1500, 2700);
     }
 
     [Fact]

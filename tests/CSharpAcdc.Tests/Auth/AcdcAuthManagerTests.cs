@@ -40,6 +40,8 @@ public class AcdcAuthManagerTests
     [Fact]
     public async Task LogoutAsync_ClearsTokens()
     {
+        _tokenProvider.GetRefreshTokenAsync(Arg.Any<CancellationToken>())
+            .Returns("refresh-token");
         _mockHttp.When("https://auth.example.com/revoke")
             .Respond(HttpStatusCode.OK);
 
@@ -52,7 +54,11 @@ public class AcdcAuthManagerTests
     [Fact]
     public async Task LogoutAsync_SendsRevocationRequest()
     {
+        _tokenProvider.GetRefreshTokenAsync(Arg.Any<CancellationToken>())
+            .Returns("refresh-token");
         _mockHttp.Expect("https://auth.example.com/revoke")
+            .WithFormData("token", "refresh-token")
+            .WithFormData("token_type_hint", "refresh_token")
             .Respond(HttpStatusCode.OK);
 
         var manager = CreateManager();
@@ -64,6 +70,8 @@ public class AcdcAuthManagerTests
     [Fact]
     public async Task LogoutAsync_RevocationFailure_DoesNotThrow()
     {
+        _tokenProvider.GetRefreshTokenAsync(Arg.Any<CancellationToken>())
+            .Returns("refresh-token");
         _mockHttp.When("https://auth.example.com/revoke")
             .Throw(new HttpRequestException("Network error"));
 
@@ -101,6 +109,8 @@ public class AcdcAuthManagerTests
     [Fact]
     public async Task LogoutAsync_ResetsBackoff()
     {
+        _tokenProvider.GetRefreshTokenAsync(Arg.Any<CancellationToken>())
+            .Returns("refresh-token");
         _mockHttp.When("https://auth.example.com/revoke")
             .Respond(HttpStatusCode.OK);
 
@@ -145,7 +155,7 @@ public class AcdcAuthManagerTests
     public void GetUserId_DelegatesToExtractor()
     {
         var manager = CreateManager();
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         // No claims, no JWT — should return null
         var userId = manager.GetUserId(request);

@@ -17,7 +17,7 @@ public class UserIdExtractorTests
     {
         var accessor = CreateHttpContextAccessor(new Claim("sub", "user-123"));
         var extractor = new UserIdExtractor(accessor);
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         var userId = extractor.ExtractUserId(request);
 
@@ -29,7 +29,7 @@ public class UserIdExtractorTests
     {
         var accessor = CreateHttpContextAccessor(new Claim("user_id", "user-456"));
         var extractor = new UserIdExtractor(accessor);
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         var userId = extractor.ExtractUserId(request);
 
@@ -41,7 +41,7 @@ public class UserIdExtractorTests
     {
         var accessor = CreateHttpContextAccessor(new Claim("uid", "user-789"));
         var extractor = new UserIdExtractor(accessor);
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         var userId = extractor.ExtractUserId(request);
 
@@ -56,7 +56,7 @@ public class UserIdExtractorTests
             new Claim("sub", "sub-value"),
             new Claim("user_id", "user_id-value"));
         var extractor = new UserIdExtractor(accessor);
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         var userId = extractor.ExtractUserId(request);
 
@@ -70,7 +70,7 @@ public class UserIdExtractorTests
         var extractor = new UserIdExtractor(accessor);
 
         var jwt = CreateJwtToken(new Claim("sub", "jwt-user"));
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
 
         var userId = extractor.ExtractUserId(request);
@@ -84,7 +84,7 @@ public class UserIdExtractorTests
         var extractor = new UserIdExtractor(); // No IHttpContextAccessor
 
         var jwt = CreateJwtToken(new Claim("sub", "jwt-user-2"));
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", jwt);
 
         var userId = extractor.ExtractUserId(request);
@@ -96,7 +96,7 @@ public class UserIdExtractorTests
     public void ExtractUserId_NoClaimsNoJwt_ReturnsNull()
     {
         var extractor = new UserIdExtractor();
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
 
         var userId = extractor.ExtractUserId(request);
 
@@ -107,7 +107,7 @@ public class UserIdExtractorTests
     public void ExtractUserId_InvalidJwt_ReturnsNull()
     {
         var extractor = new UserIdExtractor();
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "not-a-valid-jwt");
 
         var userId = extractor.ExtractUserId(request);
@@ -119,7 +119,7 @@ public class UserIdExtractorTests
     public void ExtractUserId_NonBearerScheme_ReturnsNull()
     {
         var extractor = new UserIdExtractor();
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", "dXNlcjpwYXNz");
 
         var userId = extractor.ExtractUserId(request);

@@ -17,8 +17,9 @@ public sealed class AuthHandler : DelegatingHandler
     private readonly AcdcAuthOptions _options;
     private readonly ILogger<AuthHandler> _logger;
 
-    private readonly SemaphoreSlim _refreshSemaphore = new(1, 1);
-    private volatile TaskCompletionSource<bool>? _pendingRefresh;
+    // Leader/follower coordination via atomic CAS — no separate semaphore needed.
+    // The first thread to CAS null → TCS becomes the leader; others wait on the TCS.
+    private TaskCompletionSource<bool>? _pendingRefresh;
 
     public AuthHandler(
         ITokenProvider tokenProvider,
@@ -53,8 +54,9 @@ public sealed class AuthHandler : DelegatingHandler
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
-            // Proactive refresh: fire-and-forget if token is near expiry
-            _ = TryProactiveRefreshAsync(cancellationToken);
+            // Proactive refresh if token is near expiry — uses the same leader/follower
+            // coordination as 401 refresh so the two paths never race.
+            await TryProactiveRefreshAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -69,7 +71,7 @@ public sealed class AuthHandler : DelegatingHandler
 
         // Retry with new token
         response.Dispose();
-        var retryRequest = await CloneRequestAsync(request).ConfigureAwait(false);
+        var retryRequest = await CloneRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var newToken = await _tokenProvider.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
         if (newToken is not null)
         {
@@ -93,16 +95,28 @@ public sealed class AuthHandler : DelegatingHandler
 
             _logger.LogDebug("Token expires in {TimeUntilExpiry}, proactively refreshing", timeUntilExpiry);
 
-            // Fire-and-forget — don't block the current request
+            // Try to become the refresh leader — if another refresh is in flight, skip.
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (Interlocked.CompareExchange(ref _pendingRefresh, tcs, null) is not null)
+                return;
+
+            // Fire-and-forget — don't block the current request, but coordinate
+            // through the same TCS so a concurrent 401 refresh waits on our result.
             _ = Task.Run(async () =>
             {
                 try
                 {
                     await ExecuteRefreshAsync(CancellationToken.None).ConfigureAwait(false);
+                    tcs.TrySetResult(true);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "Proactive token refresh failed");
+                    tcs.TrySetException(ex);
+                }
+                finally
+                {
+                    Interlocked.CompareExchange(ref _pendingRefresh, null, tcs);
                 }
             }, CancellationToken.None);
         }
@@ -114,12 +128,14 @@ public sealed class AuthHandler : DelegatingHandler
 
     private async Task<bool> TryRefreshOnUnauthorizedAsync(CancellationToken ct)
     {
-        // Try to acquire the refresh semaphore with immediate timeout
-        if (await _refreshSemaphore.WaitAsync(TimeSpan.Zero, ct).ConfigureAwait(false))
+        // Atomic leader election: CAS null → our TCS.
+        // If CAS succeeds we're the leader; if it returns an existing TCS we're a follower.
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var existing = Interlocked.CompareExchange(ref _pendingRefresh, tcs, null);
+
+        if (existing is null)
         {
             // We're the leader — execute the refresh
-            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _pendingRefresh = tcs;
             try
             {
                 await ExecuteRefreshAsync(ct).ConfigureAwait(false);
@@ -133,21 +149,20 @@ public sealed class AuthHandler : DelegatingHandler
             }
             finally
             {
-                _pendingRefresh = null;
-                _refreshSemaphore.Release();
+                Interlocked.CompareExchange(ref _pendingRefresh, null, tcs);
             }
         }
 
         // We're a follower — wait for the leader's refresh to complete
-        var pending = _pendingRefresh;
-        if (pending is null)
-            return false;
-
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(_options.QueueTimeout);
-            return await pending.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+            return await existing.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // Propagate caller cancellation instead of swallowing it
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -196,7 +211,8 @@ public sealed class AuthHandler : DelegatingHandler
         }
     }
 
-    private static async Task<HttpRequestMessage> CloneRequestAsync(HttpRequestMessage original)
+    private static async Task<HttpRequestMessage> CloneRequestAsync(
+        HttpRequestMessage original, CancellationToken ct)
     {
         var clone = new HttpRequestMessage(original.Method, original.RequestUri)
         {
@@ -207,7 +223,7 @@ public sealed class AuthHandler : DelegatingHandler
         // Clone content
         if (original.Content is not null)
         {
-            var contentBytes = await original.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            var contentBytes = await original.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
             var newContent = new ByteArrayContent(contentBytes);
 
             foreach (var header in original.Content.Headers)

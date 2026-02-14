@@ -93,7 +93,7 @@ public class AuthHandlerTests
             .Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(mockHandler);
-        var request = new HttpRequestMessage(HttpMethod.Get, "/test");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/test");
         request.Options.Set(AcdcRequestOptions.SkipAuth, true);
 
         var response = await client.SendAsync(request);
@@ -272,7 +272,7 @@ public class AuthHandlerTests
         });
 
         using var client = CreateClient(mockHandler);
-        var request = new HttpRequestMessage(HttpMethod.Post, "/test")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/test")
         {
             Content = new StringContent("""{"data": "test"}""", System.Text.Encoding.UTF8, "application/json"),
         };

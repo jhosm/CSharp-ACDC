@@ -162,12 +162,9 @@ public class OAuthTokenRefreshStrategyTests
         factory.CreateClient("acdc-auth").Returns(_ => _mockHttp.ToHttpClient());
         var strategy = new OAuthTokenRefreshStrategy(factory, Options.Create(optionsNoSecret));
 
-        _mockHttp.When("https://auth.example.com/token")
-            .With(req =>
-            {
-                var body = req.Content!.ReadAsStringAsync().Result;
-                return !body.Contains("client_secret");
-            })
+        _mockHttp.Expect("https://auth.example.com/token")
+            .WithFormData("grant_type", "refresh_token")
+            .WithFormData("client_id", "public-client")
             .Respond("application/json", """
             {
                 "access_token": "a",
@@ -178,5 +175,42 @@ public class OAuthTokenRefreshStrategyTests
 
         var result = await strategy.RefreshAsync("token", CancellationToken.None);
         result.AccessToken.Should().Be("a");
+        _mockHttp.VerifyNoOutstandingExpectation();
+    }
+
+    [Fact]
+    public async Task RefreshAsync_RefreshTokenOmitted_FallsBackToInputToken()
+    {
+        _mockHttp.When("https://auth.example.com/token")
+            .Respond("application/json", """
+            {
+                "access_token": "new-access",
+                "expires_in": 3600
+            }
+            """);
+
+        var strategy = CreateStrategy();
+        var result = await strategy.RefreshAsync("original-refresh", CancellationToken.None);
+
+        result.AccessToken.Should().Be("new-access");
+        result.RefreshToken.Should().Be("original-refresh");
+    }
+
+    [Fact]
+    public async Task RefreshAsync_NumericStringExpiresIn_ParsesCorrectly()
+    {
+        _mockHttp.When("https://auth.example.com/token")
+            .Respond("application/json", """
+            {
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": "7200"
+            }
+            """);
+
+        var strategy = CreateStrategy();
+        var result = await strategy.RefreshAsync("token", CancellationToken.None);
+
+        result.ExpiresAt.Should().BeCloseTo(DateTimeOffset.UtcNow.AddHours(2), TimeSpan.FromSeconds(5));
     }
 }

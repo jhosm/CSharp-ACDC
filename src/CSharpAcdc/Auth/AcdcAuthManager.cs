@@ -40,13 +40,17 @@ public sealed class AcdcAuthManager
 
         try
         {
-            await _tokenProvider.ClearTokensAsync(ct).ConfigureAwait(false);
+            // Capture refresh token BEFORE clearing — we need it for the revocation request.
+            var refreshToken = await _tokenProvider.GetRefreshTokenAsync(ct).ConfigureAwait(false);
 
+            // Revoke on the server first, then clear locally. This order ensures the
+            // server invalidates the token even if the local clear fails.
             if (!string.IsNullOrEmpty(_options.RevocationEndpoint))
             {
-                await TryRevokeTokenAsync(ct).ConfigureAwait(false);
+                await TryRevokeTokenAsync(refreshToken, ct).ConfigureAwait(false);
             }
 
+            await _tokenProvider.ClearTokensAsync(ct).ConfigureAwait(false);
             await _backoffManager.ResetAsync(ct).ConfigureAwait(false);
 
             _logger.LogInformation("Logout completed successfully");
@@ -82,16 +86,25 @@ public sealed class AcdcAuthManager
 
     public string? GetUserId(HttpRequestMessage request) => _userIdExtractor.ExtractUserId(request);
 
-    private async Task TryRevokeTokenAsync(CancellationToken ct)
+    private async Task TryRevokeTokenAsync(string? refreshToken, CancellationToken ct)
     {
         try
         {
             using var client = _httpClientFactory.CreateClient("acdc-auth");
-            using var content = new FormUrlEncodedContent(new Dictionary<string, string>
+
+            var parameters = new Dictionary<string, string>
             {
                 ["client_id"] = _options.ClientId,
-            });
+            };
 
+            // RFC 7009: include the token and type hint so the server can revoke it.
+            if (refreshToken is not null)
+            {
+                parameters["token"] = refreshToken;
+                parameters["token_type_hint"] = "refresh_token";
+            }
+
+            using var content = new FormUrlEncodedContent(parameters);
             await client.PostAsync(_options.RevocationEndpoint, content, ct).ConfigureAwait(false);
             _logger.LogDebug("Token revocation request sent");
         }

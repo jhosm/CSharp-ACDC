@@ -140,6 +140,9 @@ public class AuthHandlerConcurrencyTests
         var followerAct = () => client.GetAsync("/follower");
         var ex = await followerAct.Should().ThrowAsync<AcdcAuthException>();
         ex.Which.Message.Should().Contain("timed out");
+
+        // Await the leader to prevent background task leak
+        try { await leaderTask; } catch { /* Leader may also fail — we only care about follower behavior */ }
     }
 
     [Fact]
