@@ -72,6 +72,11 @@ public sealed class AuthHandler : DelegatingHandler
             await TryProactiveRefreshAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Buffer content before first send so it can be re-read on 401 retry clone.
+        // No-op for already-buffered types (StringContent, ByteArrayContent).
+        if (request.Content is not null)
+            await request.Content.LoadIntoBufferAsync(cancellationToken).ConfigureAwait(false);
+
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode != HttpStatusCode.Unauthorized)
@@ -119,8 +124,8 @@ public sealed class AuthHandler : DelegatingHandler
             {
                 try
                 {
-                    await ExecuteRefreshAsync(CancellationToken.None).ConfigureAwait(false);
-                    tcs.TrySetResult(true);
+                    var refreshed = await ExecuteRefreshAsync(CancellationToken.None).ConfigureAwait(false);
+                    tcs.TrySetResult(refreshed);
                 }
                 catch (Exception ex)
                 {
@@ -141,64 +146,75 @@ public sealed class AuthHandler : DelegatingHandler
 
     private async Task<bool> TryRefreshOnUnauthorizedAsync(CancellationToken ct)
     {
-        // Atomic leader election: CAS null → our TCS.
-        // If CAS succeeds we're the leader; if it returns an existing TCS we're a follower.
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var existing = Interlocked.CompareExchange(ref _pendingRefresh, tcs, null);
-
-        if (existing is null)
+        // Two attempts: if we're a follower and the leader fails with a transient
+        // error (e.g., from a concurrent proactive refresh), loop back and attempt
+        // our own refresh as a new leader instead of propagating the failure.
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            // We're the leader — execute the refresh
+            // Atomic leader election: CAS null → our TCS.
+            // If CAS succeeds we're the leader; if it returns an existing TCS we're a follower.
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var existing = Interlocked.CompareExchange(ref _pendingRefresh, tcs, null);
+
+            if (existing is null)
+            {
+                // We're the leader — execute the refresh
+                try
+                {
+                    var refreshed = await ExecuteRefreshAsync(ct).ConfigureAwait(false);
+                    tcs.TrySetResult(refreshed);
+                    return refreshed;
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                    return false;
+                }
+                finally
+                {
+                    Interlocked.CompareExchange(ref _pendingRefresh, null, tcs);
+                }
+            }
+
+            // We're a follower — wait for the leader's refresh to complete
             try
             {
-                await ExecuteRefreshAsync(ct).ConfigureAwait(false);
-                tcs.TrySetResult(true);
-                return true;
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(_options.QueueTimeout);
+                return await existing.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                tcs.TrySetException(ex);
-                return false;
+                throw; // Propagate caller cancellation instead of swallowing it
             }
-            finally
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                Interlocked.CompareExchange(ref _pendingRefresh, null, tcs);
+                throw new AcdcAuthException(
+                    $"Token refresh queue timed out after {_options.QueueTimeout.TotalSeconds}s");
+            }
+            catch (AcdcAuthException)
+            {
+                throw;
+            }
+            catch
+            {
+                // Leader failed with a transient error (e.g., from a concurrent proactive
+                // refresh). The leader already cleared _pendingRefresh in its finally block.
+                // Loop to attempt our own refresh as a new leader.
             }
         }
 
-        // We're a follower — wait for the leader's refresh to complete
-        try
-        {
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(_options.QueueTimeout);
-            return await existing.Task.WaitAsync(timeoutCts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw; // Propagate caller cancellation instead of swallowing it
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new AcdcAuthException(
-                $"Token refresh queue timed out after {_options.QueueTimeout.TotalSeconds}s");
-        }
-        catch (AcdcAuthException)
-        {
-            throw;
-        }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
-    private async Task ExecuteRefreshAsync(CancellationToken ct)
+    /// <returns><c>true</c> if tokens were refreshed; <c>false</c> if no refresh token was available.</returns>
+    private async Task<bool> ExecuteRefreshAsync(CancellationToken ct)
     {
         var refreshToken = await _tokenProvider.GetRefreshTokenAsync(ct).ConfigureAwait(false);
         if (refreshToken is null)
         {
             _logger.LogWarning("No refresh token available");
-            return;
+            return false;
         }
 
         try
@@ -208,6 +224,7 @@ public sealed class AuthHandler : DelegatingHandler
                 result.AccessToken, result.RefreshToken, result.ExpiresAt, ct).ConfigureAwait(false);
             await _backoffManager.ResetAsync(ct).ConfigureAwait(false);
             _logger.LogDebug("Token refresh succeeded, expires at {ExpiresAt}", result.ExpiresAt);
+            return true;
         }
         catch (AcdcAuthException ex)
         {

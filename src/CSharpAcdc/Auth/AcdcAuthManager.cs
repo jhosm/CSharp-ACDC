@@ -18,7 +18,9 @@ public sealed class AcdcAuthManager
     private readonly ILogger<AcdcAuthManager> _logger;
     private readonly UserIdExtractor _userIdExtractor;
 
-    private volatile bool _logoutRequested;
+    // Serializes LogoutAsync and ForceRefreshAsync to prevent the race where
+    // ForceRefresh saves new tokens after Logout has already cleared them.
+    private readonly SemaphoreSlim _authLock = new(1, 1);
 
     /// <summary>
     /// Initializes a new instance of <see cref="AcdcAuthManager"/>.
@@ -54,8 +56,7 @@ public sealed class AcdcAuthManager
     /// <param name="ct">Cancellation token.</param>
     public async Task LogoutAsync(CancellationToken ct)
     {
-        _logoutRequested = true;
-
+        await _authLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             // Capture refresh token BEFORE clearing — we need it for the revocation request.
@@ -75,7 +76,7 @@ public sealed class AcdcAuthManager
         }
         finally
         {
-            _logoutRequested = false;
+            _authLock.Release();
         }
     }
 
@@ -85,25 +86,27 @@ public sealed class AcdcAuthManager
     /// <param name="ct">Cancellation token.</param>
     public async Task ForceRefreshAsync(CancellationToken ct)
     {
-        var refreshToken = await _tokenProvider.GetRefreshTokenAsync(ct).ConfigureAwait(false);
-        if (refreshToken is null)
+        await _authLock.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("No refresh token available for force refresh");
-            return;
-        }
+            var refreshToken = await _tokenProvider.GetRefreshTokenAsync(ct).ConfigureAwait(false);
+            if (refreshToken is null)
+            {
+                _logger.LogWarning("No refresh token available for force refresh");
+                return;
+            }
 
-        if (_logoutRequested)
+            var result = await _refreshStrategy.RefreshAsync(refreshToken, ct).ConfigureAwait(false);
+            await _tokenProvider.SaveTokensAsync(
+                result.AccessToken, result.RefreshToken, result.ExpiresAt, ct).ConfigureAwait(false);
+            await _backoffManager.ResetAsync(ct).ConfigureAwait(false);
+
+            _logger.LogInformation("Force token refresh completed, expires at {ExpiresAt}", result.ExpiresAt);
+        }
+        finally
         {
-            _logger.LogDebug("Force refresh cancelled — logout in progress");
-            return;
+            _authLock.Release();
         }
-
-        var result = await _refreshStrategy.RefreshAsync(refreshToken, ct).ConfigureAwait(false);
-        await _tokenProvider.SaveTokensAsync(
-            result.AccessToken, result.RefreshToken, result.ExpiresAt, ct).ConfigureAwait(false);
-        await _backoffManager.ResetAsync(ct).ConfigureAwait(false);
-
-        _logger.LogInformation("Force token refresh completed, expires at {ExpiresAt}", result.ExpiresAt);
     }
 
     /// <summary>

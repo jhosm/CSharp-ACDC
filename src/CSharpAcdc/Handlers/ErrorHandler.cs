@@ -45,50 +45,54 @@ public class ErrorHandler : DelegatingHandler
         if (response.IsSuccessStatusCode)
             return response;
 
-        var statusCode = response.StatusCode;
-        string? body;
-        try
+        // Non-success path: we own the response and must dispose it before throwing.
+        using (response)
         {
-            body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var statusCode = response.StatusCode;
+            string? body;
+            try
+            {
+                body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                body = null;
+            }
+
+            var truncatedBody = AcdcException.TruncateResponseBody(body);
+            var requestUrl = AcdcException.RedactUrl(request.RequestUri?.ToString());
+
+            throw statusCode switch
+            {
+                HttpStatusCode.Unauthorized =>
+                    AcdcAuthException.FromStatusCode(statusCode, truncatedBody, requestUrl),
+
+                HttpStatusCode.Forbidden =>
+                    AcdcAuthException.FromStatusCode(statusCode, truncatedBody, requestUrl),
+
+                >= HttpStatusCode.InternalServerError =>
+                    new AcdcServerException(
+                        $"Server error: {(int)statusCode} {statusCode}",
+                        statusCode,
+                        truncatedBody,
+                        requestUrl),
+
+                >= HttpStatusCode.BadRequest =>
+                    new AcdcClientException(
+                        $"Client error: {(int)statusCode} {statusCode}",
+                        statusCode,
+                        truncatedBody,
+                        requestUrl,
+                        ParseRetryAfter(response)),
+
+                _ =>
+                    new AcdcException(
+                        $"Unexpected error: {(int)statusCode} {statusCode}",
+                        statusCode,
+                        truncatedBody,
+                        requestUrl),
+            };
         }
-        catch
-        {
-            body = null;
-        }
-
-        var truncatedBody = AcdcException.TruncateResponseBody(body);
-        var requestUrl = AcdcException.RedactUrl(request.RequestUri?.ToString());
-
-        throw statusCode switch
-        {
-            HttpStatusCode.Unauthorized =>
-                AcdcAuthException.FromStatusCode(statusCode, truncatedBody, requestUrl),
-
-            HttpStatusCode.Forbidden =>
-                AcdcAuthException.FromStatusCode(statusCode, truncatedBody, requestUrl),
-
-            >= HttpStatusCode.InternalServerError =>
-                new AcdcServerException(
-                    $"Server error: {(int)statusCode} {statusCode}",
-                    statusCode,
-                    truncatedBody,
-                    requestUrl),
-
-            >= HttpStatusCode.BadRequest =>
-                new AcdcClientException(
-                    $"Client error: {(int)statusCode} {statusCode}",
-                    statusCode,
-                    truncatedBody,
-                    requestUrl,
-                    ParseRetryAfter(response)),
-
-            _ =>
-                new AcdcException(
-                    $"Unexpected error: {(int)statusCode} {statusCode}",
-                    statusCode,
-                    truncatedBody,
-                    requestUrl),
-        };
     }
 
     private static TimeSpan? ParseRetryAfter(HttpResponseMessage response)
