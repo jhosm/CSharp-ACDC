@@ -5,8 +5,11 @@ using CSharpAcdc.Extensions;
 
 namespace CSharpAcdc.Handlers;
 
-public class DeduplicationHandler : DelegatingHandler
+public sealed class DeduplicationHandler : DelegatingHandler
 {
+    // Instance-scoped dedup state: IHttpClientFactory pools handler instances with ~2-min
+    // lifetime, so dedup state is lost on pool rotation. This means two concurrent GETs that
+    // span a rotation boundary won't be coalesced — an acceptable minor inefficiency.
     private readonly ConcurrentDictionary<string, Lazy<Task<DeduplicatedResponse>>> _inFlight = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(
@@ -18,13 +21,16 @@ public class DeduplicationHandler : DelegatingHandler
 
         var key = BuildDeduplicationKey(request);
 
+        // The upstream request uses CancellationToken.None so that no single subscriber
+        // can cancel the shared request. Individual callers apply their own cancellation
+        // via WaitAsync below.
         var lazy = _inFlight.GetOrAdd(key, _ => new Lazy<Task<DeduplicatedResponse>>(
-            () => ExecuteAndBufferAsync(request, cancellationToken)));
+            () => ExecuteAndBufferAsync(request, CancellationToken.None)));
 
         try
         {
-            var dedupResponse = await lazy.Value.ConfigureAwait(false);
-            return dedupResponse.Clone();
+            var dedupResponse = await lazy.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return dedupResponse.ToResponseMessage(request);
         }
         finally
         {
@@ -38,7 +44,7 @@ public class DeduplicationHandler : DelegatingHandler
         HttpRequestMessage request,
         CancellationToken cancellationToken)
     {
-        var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
         return await DeduplicatedResponse.FromResponseAsync(response).ConfigureAwait(false);
     }
 
@@ -61,9 +67,13 @@ public class DeduplicationHandler : DelegatingHandler
         sb.Append(request.RequestUri?.ToString() ?? string.Empty);
         sb.Append(':');
 
+        // Normalize header names to lowercase and sort values within each header
+        // so that insertion order and casing differences don't produce different keys.
         var sortedHeaders = request.Headers
             .OrderBy(h => h.Key, StringComparer.OrdinalIgnoreCase)
-            .SelectMany(h => h.Value.Select(v => $"{h.Key}:{v}"));
+            .SelectMany(h => h.Value
+                .OrderBy(v => v, StringComparer.Ordinal)
+                .Select(v => $"{h.Key.ToLowerInvariant()}:{v}"));
 
         var headerString = string.Join(",", sortedHeaders);
         var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(headerString));
@@ -72,19 +82,19 @@ public class DeduplicationHandler : DelegatingHandler
         return sb.ToString();
     }
 
-    private sealed class DeduplicatedResponse
+    private sealed record DeduplicatedResponse
     {
         public required System.Net.HttpStatusCode StatusCode { get; init; }
         public required byte[]? ContentBytes { get; init; }
-        public required List<KeyValuePair<string, IEnumerable<string>>> ResponseHeaders { get; init; }
-        public required List<KeyValuePair<string, IEnumerable<string>>> ContentHeaders { get; init; }
+        public required IReadOnlyList<KeyValuePair<string, IEnumerable<string>>> ResponseHeaders { get; init; }
+        public required IReadOnlyList<KeyValuePair<string, IEnumerable<string>>> ContentHeaders { get; init; }
         public required string? ReasonPhrase { get; init; }
         public required Version Version { get; init; }
 
         public static async Task<DeduplicatedResponse> FromResponseAsync(HttpResponseMessage response)
         {
             byte[]? contentBytes = null;
-            List<KeyValuePair<string, IEnumerable<string>>> contentHeaders = [];
+            IReadOnlyList<KeyValuePair<string, IEnumerable<string>>> contentHeaders = [];
 
             if (response.Content is not null)
             {
@@ -103,12 +113,13 @@ public class DeduplicationHandler : DelegatingHandler
             };
         }
 
-        public HttpResponseMessage Clone()
+        public HttpResponseMessage ToResponseMessage(HttpRequestMessage? requestMessage = null)
         {
             var response = new HttpResponseMessage(StatusCode)
             {
                 ReasonPhrase = ReasonPhrase,
                 Version = Version,
+                RequestMessage = requestMessage,
             };
 
             foreach (var header in ResponseHeaders)

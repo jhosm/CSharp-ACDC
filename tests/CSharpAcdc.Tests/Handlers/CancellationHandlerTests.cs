@@ -29,7 +29,7 @@ public class CancellationHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK, "application/json", """{"ok":true}""");
 
         using var client = CreateClient(tracker, mockHandler);
-        var response = await client.GetAsync("/test");
+        using var response = await client.GetAsync("/test");
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -42,7 +42,7 @@ public class CancellationHandlerTests
         mockHandler.When("*").Respond(HttpStatusCode.OK);
 
         using var client = CreateClient(tracker, mockHandler);
-        await client.GetAsync("/test");
+        using var response = await client.GetAsync("/test");
 
         tracker.ActiveCount.Should().Be(0);
     }
@@ -83,11 +83,14 @@ public class CancellationHandlerTests
         };
 
         using var cts = new CancellationTokenSource();
-        await client.GetAsync("/test", cts.Token);
+        using var response = await client.GetAsync("/test", cts.Token);
 
-        // The downstream token should be different from the original
-        // because it's a linked token
+        // The downstream token should be a linked token, not the original caller token.
+        // (Post-request linkage verification isn't possible because the linked CTS is
+        // disposed in the handler's finally block. Active-flight propagation is covered
+        // by ExternalCancellation_PropagatesThroughLinkedToken.)
         capturedToken.Should().NotBe(CancellationToken.None);
+        capturedToken.Should().NotBe(cts.Token);
     }
 
     [Fact]
@@ -153,6 +156,15 @@ public class CancellationHandlerTests
 
         var act = () => requestTask;
         await act.Should().ThrowAsync<TaskCanceledException>();
+    }
+
+    [Fact]
+    public void Constructor_NullTracker_ThrowsArgumentNullException()
+    {
+        var act = () => new CancellationHandler(null!);
+
+        act.Should().Throw<ArgumentNullException>()
+            .WithParameterName("tracker");
     }
 
     /// <summary>

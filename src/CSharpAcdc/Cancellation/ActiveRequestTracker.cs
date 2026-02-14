@@ -10,28 +10,36 @@ public sealed class ActiveRequestTracker
 
     public void Track(CancellationTokenSource cts)
     {
+        ArgumentNullException.ThrowIfNull(cts);
         _activeSources.TryAdd(cts, 0);
     }
 
     public void Untrack(CancellationTokenSource cts)
     {
+        ArgumentNullException.ThrowIfNull(cts);
         _activeSources.TryRemove(cts, out _);
     }
 
     public void CancelAll()
     {
-        foreach (var cts in _activeSources.Keys)
+        // Remove-then-cancel pattern: avoids the race where a CTS added between
+        // enumeration and Clear() would be silently dropped without being canceled.
+        while (!_activeSources.IsEmpty)
         {
-            try
+            foreach (var cts in _activeSources.Keys)
             {
-                cts.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                // CTS may have been disposed between enumeration and cancel
+                if (!_activeSources.TryRemove(cts, out _))
+                    continue;
+
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // CTS may have been disposed between removal and cancel.
+                }
             }
         }
-
-        _activeSources.Clear();
     }
 }

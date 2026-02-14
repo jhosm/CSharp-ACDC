@@ -2,12 +2,13 @@ using CSharpAcdc.Cancellation;
 
 namespace CSharpAcdc.Handlers;
 
-public class CancellationHandler : DelegatingHandler
+public sealed class CancellationHandler : DelegatingHandler
 {
     private readonly ActiveRequestTracker _tracker;
 
     public CancellationHandler(ActiveRequestTracker tracker)
     {
+        ArgumentNullException.ThrowIfNull(tracker);
         _tracker = tracker;
     }
 
