@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Net;
 using CSharpAcdc.Cache;
 using CSharpAcdc.Configuration;
-using CSharpAcdc.Exceptions;
 using CSharpAcdc.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,19 +15,19 @@ public class CacheHandler : DelegatingHandler
     private readonly AcdcCacheOptions _options;
     private readonly ILogger<CacheHandler> _logger;
     private readonly Func<HttpRequestMessage, string?>? _userIdProvider;
-    private readonly AcdcCacheManager? _cacheManager;
+    private readonly IAcdcCacheManager? _cacheManager;
 
-    // ETags and last responses survive cache expiration for 304 revalidation
+    // ETags and last responses survive cache expiration for 304 revalidation.
+    // Bounded: cleared during invalidation and trimmed when exceeding MaxETagStoreSize.
     private readonly ConcurrentDictionary<string, (string ETag, CachedResponse Response)> _etagStore = new();
-
-    private static readonly HttpRequestOptionsKey<string> CacheSourceKey = new("acdc_source");
+    private const int MaxETagStoreSize = 1000;
 
     public CacheHandler(
         IFusionCache cache,
         IOptions<AcdcCacheOptions> options,
         ILogger<CacheHandler> logger,
         Func<HttpRequestMessage, string?>? userIdProvider = null,
-        AcdcCacheManager? cacheManager = null)
+        IAcdcCacheManager? cacheManager = null)
     {
         _cache = cache;
         _options = options.Value;
@@ -69,19 +68,10 @@ public class CacheHandler : DelegatingHandler
             ? maxAge
             : (TimeSpan?)null;
 
-        try
-        {
-            var (cachedResponse, fromCache) = await GetOrFetchAsync(
-                cacheKey, request, perRequestDuration, cancellationToken).ConfigureAwait(false);
+        var (cachedResponse, fromCache) = await GetOrFetchAsync(
+            cacheKey, request, perRequestDuration, cancellationToken).ConfigureAwait(false);
 
-            return ToHttpResponseMessage(cachedResponse, fromCache);
-        }
-        catch (Exception ex) when (ex is not AcdcCacheException)
-        {
-            _logger.LogWarning(ex, "Cache operation failed for key {CacheKey}, falling through to downstream", cacheKey);
-            var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            return response;
-        }
+        return ToHttpResponseMessage(cachedResponse, fromCache);
     }
 
     private async Task<(CachedResponse Response, bool FromCache)> GetOrFetchAsync(
@@ -119,15 +109,20 @@ public class CacheHandler : DelegatingHandler
         CachedResponse? lastKnownResponse,
         CancellationToken cancellationToken)
     {
+        // Clone the request to avoid mutating the caller's instance.
+        // With AllowTimedOutFactoryBackgroundCompletion, the factory may continue
+        // after the soft timeout returns stale data, creating a race on the original request.
+        using var clonedRequest = CloneRequest(request);
+
         // Add If-None-Match header if we have a stored ETag
         if (_options.ETagEnabled && storedETag is not null)
         {
-            request.Headers.IfNoneMatch.Clear();
-            request.Headers.IfNoneMatch.Add(
+            clonedRequest.Headers.IfNoneMatch.Clear();
+            clonedRequest.Headers.IfNoneMatch.Add(
                 new System.Net.Http.Headers.EntityTagHeaderValue($"\"{storedETag}\""));
         }
 
-        var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await base.SendAsync(clonedRequest, cancellationToken).ConfigureAwait(false);
 
         // On 304 Not Modified, return last known cached content
         if (response.StatusCode == HttpStatusCode.NotModified && lastKnownResponse is not null)
@@ -142,6 +137,7 @@ public class CacheHandler : DelegatingHandler
         if (cachedResponse.ETag is not null)
         {
             _etagStore[cacheKey] = (cachedResponse.ETag, cachedResponse);
+            TrimETagStoreIfNeeded();
         }
 
         return cachedResponse;
@@ -181,10 +177,31 @@ public class CacheHandler : DelegatingHandler
         try
         {
             await _cacheManager.InvalidateForBaseUrlAsync(baseUrl, cancellationToken).ConfigureAwait(false);
+            ClearETagsForBaseUrl(baseUrl);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to invalidate cache entries for base URL {BaseUrl}", baseUrl);
+        }
+    }
+
+    private void ClearETagsForBaseUrl(string baseUrl)
+    {
+        var keysToRemove = _etagStore.Keys
+            .Where(key => key.Contains(baseUrl, StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            _etagStore.TryRemove(key, out _);
+        }
+    }
+
+    private void TrimETagStoreIfNeeded()
+    {
+        if (_etagStore.Count > MaxETagStoreSize)
+        {
+            _etagStore.Clear();
         }
     }
 
@@ -200,11 +217,30 @@ public class CacheHandler : DelegatingHandler
         return $"{uri.Scheme}://{uri.Authority}{uri.AbsolutePath}";
     }
 
+    private static HttpRequestMessage CloneRequest(HttpRequestMessage original)
+    {
+        var clone = new HttpRequestMessage(original.Method, original.RequestUri);
+        foreach (var header in original.Headers)
+        {
+            clone.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        var cloneOptions = (IDictionary<string, object?>)clone.Options;
+        foreach (var option in (IDictionary<string, object?>)original.Options)
+        {
+            cloneOptions[option.Key] = option.Value;
+        }
+
+        return clone;
+    }
+
     private static async Task<CachedResponse> ToCachedResponseAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        var content = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        var content = response.Content is not null
+            ? await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false)
+            : Array.Empty<byte>();
 
         var headers = new Dictionary<string, string[]>();
         foreach (var header in response.Headers)
@@ -212,9 +248,12 @@ public class CacheHandler : DelegatingHandler
             headers[header.Key] = header.Value.ToArray();
         }
 
-        foreach (var header in response.Content.Headers)
+        if (response.Content is not null)
         {
-            headers[header.Key] = header.Value.ToArray();
+            foreach (var header in response.Content.Headers)
+            {
+                headers[header.Key] = header.Value.ToArray();
+            }
         }
 
         var etag = response.Headers.ETag?.Tag?.Trim('"');

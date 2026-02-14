@@ -15,6 +15,7 @@ public class CacheHandlerETagTests : IDisposable
 {
     private readonly FusionCache _fusionCache = new(new FusionCacheOptions());
     private readonly AcdcCacheManager _cacheManager;
+    private readonly List<IDisposable> _disposables = [];
 
     public CacheHandlerETagTests()
     {
@@ -23,6 +24,8 @@ public class CacheHandlerETagTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var d in _disposables)
+            d.Dispose();
         _fusionCache.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -39,6 +42,8 @@ public class CacheHandlerETagTests : IDisposable
             InnerHandler = new StubHandler(responseFactory),
         };
         var client = new HttpClient(handler);
+        _disposables.Add(handler);
+        _disposables.Add(client);
         return (handler, client);
     }
 
@@ -55,7 +60,7 @@ public class CacheHandlerETagTests : IDisposable
             return Task.FromResult(response);
         });
 
-        await client.GetAsync("https://api.example.com/data");
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
 
         // Verify ETag was stored in cache
         var cached = await _fusionCache.TryGetAsync<CachedResponse>("GET:https://api.example.com/data");
@@ -82,15 +87,15 @@ public class CacheHandlerETagTests : IDisposable
             return Task.FromResult(response);
         }, new AcdcCacheOptions { Duration = TimeSpan.FromMilliseconds(1) });
 
-        // First call — no If-None-Match
-        await client.GetAsync("https://api.example.com/data");
+        // First call -- no If-None-Match
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
         receivedIfNoneMatch.Should().BeNull();
 
         // Wait for cache to expire so factory runs again
         await Task.Delay(50);
 
-        // Second call — should send If-None-Match with cached ETag
-        await client.GetAsync("https://api.example.com/data");
+        // Second call -- should send If-None-Match with cached ETag
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
         callCount.Should().Be(2);
         receivedIfNoneMatch.Should().Be("\"v1\"");
     }
@@ -116,16 +121,16 @@ public class CacheHandlerETagTests : IDisposable
             return Task.FromResult(response);
         }, new AcdcCacheOptions { Duration = TimeSpan.FromMilliseconds(1) });
 
-        // First call — populates cache
-        var response1 = await client.GetAsync("https://api.example.com/data");
+        // First call -- populates cache
+        using var response1 = await client.GetAsync("https://api.example.com/data");
         var content1 = await response1.Content.ReadAsStringAsync();
         content1.Should().Be("original-data");
 
         // Wait for cache to expire
         await Task.Delay(50);
 
-        // Second call — server returns 304, should get cached content
-        var response2 = await client.GetAsync("https://api.example.com/data");
+        // Second call -- server returns 304, should get cached content
+        using var response2 = await client.GetAsync("https://api.example.com/data");
         var content2 = await response2.Content.ReadAsStringAsync();
         content2.Should().Be("original-data");
         callCount.Should().Be(2);
@@ -147,9 +152,9 @@ public class CacheHandlerETagTests : IDisposable
             return Task.FromResult(response);
         }, new AcdcCacheOptions { ETagEnabled = false, Duration = TimeSpan.FromMilliseconds(1) });
 
-        await client.GetAsync("https://api.example.com/data");
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
         await Task.Delay(50);
-        await client.GetAsync("https://api.example.com/data");
+        (await client.GetAsync("https://api.example.com/data")).Dispose();
 
         sentIfNoneMatch.Should().BeFalse();
     }

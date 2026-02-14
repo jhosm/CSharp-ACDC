@@ -9,7 +9,7 @@ public class AcdcCacheManager : IAcdcCacheManager
     private readonly IFusionCache _cache;
     private readonly ILogger<AcdcCacheManager> _logger;
 
-    // Maps base URL → set of known cache keys (including user-prefixed variants)
+    // Maps base URL -> set of known cache keys (including user-prefixed variants)
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _trackedKeys = new();
 
     public AcdcCacheManager(IFusionCache cache, ILogger<AcdcCacheManager> logger)
@@ -45,7 +45,9 @@ public class AcdcCacheManager : IAcdcCacheManager
     {
         _logger.LogDebug("Clearing cache entries for URL: {Url}", url);
 
-        if (_trackedKeys.TryGetValue(url, out var keys))
+        var baseUrl = NormalizeToBaseUrl(url);
+
+        if (_trackedKeys.TryGetValue(baseUrl, out var keys))
         {
             foreach (var key in keys.Keys)
             {
@@ -62,13 +64,14 @@ public class AcdcCacheManager : IAcdcCacheManager
 
         foreach (var kvp in _trackedKeys)
         {
-            foreach (var key in kvp.Value.Keys)
+            var userKeys = kvp.Value.Keys
+                .Where(key => key.Contains($":{userId}:", StringComparison.Ordinal))
+                .ToList();
+
+            foreach (var key in userKeys)
             {
-                if (key.Contains($":{userId}:", StringComparison.Ordinal))
-                {
-                    await _cache.RemoveAsync(key, token: ct).ConfigureAwait(false);
-                    kvp.Value.TryRemove(key, out _);
-                }
+                await _cache.RemoveAsync(key, token: ct).ConfigureAwait(false);
+                kvp.Value.TryRemove(key, out _);
             }
         }
     }
@@ -86,5 +89,12 @@ public class AcdcCacheManager : IAcdcCacheManager
 
             keys.Clear();
         }
+    }
+
+    private static string NormalizeToBaseUrl(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return $"{uri.Scheme}://{uri.Authority}{uri.AbsolutePath}";
+        return url;
     }
 }
