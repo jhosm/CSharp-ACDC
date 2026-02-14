@@ -4,6 +4,10 @@ using Microsoft.AspNetCore.Http;
 
 namespace CSharpAcdc.Auth;
 
+/// <summary>
+/// Extracts user identity from HTTP requests by inspecting <see cref="HttpContext"/> claims
+/// or parsing JWT tokens from the Authorization header.
+/// </summary>
 public sealed class UserIdExtractor
 {
     private static readonly string[] ClaimPriority = ["sub", "user_id", "uid"];
@@ -11,11 +15,21 @@ public sealed class UserIdExtractor
 
     private readonly IHttpContextAccessor? _httpContextAccessor;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="UserIdExtractor"/>.
+    /// </summary>
+    /// <param name="httpContextAccessor">Optional accessor for the current HTTP context.</param>
     public UserIdExtractor(IHttpContextAccessor? httpContextAccessor = null)
     {
         _httpContextAccessor = httpContextAccessor;
     }
 
+    /// <summary>
+    /// Extracts the user ID from the request, first trying HttpContext claims,
+    /// then falling back to JWT parsing from the Authorization header.
+    /// </summary>
+    /// <param name="request">The HTTP request to extract user identity from.</param>
+    /// <returns>The user ID, or <c>null</c> if not available.</returns>
     public string? ExtractUserId(HttpRequestMessage request)
     {
         // First try HttpContext.User.Claims if accessor available

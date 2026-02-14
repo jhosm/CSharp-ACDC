@@ -1,7 +1,16 @@
 namespace CSharpAcdc.Extensions;
 
+/// <summary>
+/// Extension methods for <see cref="HttpRequestMessage"/>.
+/// </summary>
 public static class HttpRequestMessageExtensions
 {
+    /// <summary>
+    /// Creates a deep clone of the request including headers, content, and options.
+    /// The original request's content is replaced with a replayable <see cref="ByteArrayContent"/>.
+    /// </summary>
+    /// <param name="request">The request to clone.</param>
+    /// <returns>A cloned request that can be sent independently.</returns>
     public static async Task<HttpRequestMessage> CloneAsync(this HttpRequestMessage request)
     {
         var clone = new HttpRequestMessage(request.Method, request.RequestUri)

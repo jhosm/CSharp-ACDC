@@ -1,5 +1,9 @@
 namespace CSharpAcdc.Auth;
 
+/// <summary>
+/// Manages exponential backoff with jitter for transient authentication failures.
+/// Delays increase from 1s to a maximum of 30s.
+/// </summary>
 public sealed class BackoffManager
 {
     private static readonly TimeSpan BaseDelay = TimeSpan.FromSeconds(1);
@@ -7,6 +11,10 @@ public sealed class BackoffManager
 
     private int _attempt;
 
+    /// <summary>
+    /// Waits for the current backoff delay if any failures have been recorded.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
     public async Task WaitIfNeededAsync(CancellationToken ct)
     {
         var attempt = Volatile.Read(ref _attempt);
@@ -23,6 +31,10 @@ public sealed class BackoffManager
         await Task.Delay(delay, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Records a transient failure, incrementing the backoff attempt counter.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
     public Task RecordFailureAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
@@ -30,6 +42,10 @@ public sealed class BackoffManager
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Resets the backoff attempt counter to zero after a successful operation.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
     public Task ResetAsync(CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();

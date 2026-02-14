@@ -15,16 +15,37 @@ using ZiggyCreatures.Caching.Fusion;
 
 namespace CSharpAcdc.Extensions;
 
+/// <summary>
+/// Extension methods for registering the ACDC HTTP client pipeline with dependency injection.
+/// </summary>
 public static class ServiceCollectionExtensions
 {
+    /// <summary>
+    /// Registers the ACDC HTTP client with default (zero-config) settings.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <returns>The HTTP client builder for further configuration.</returns>
     public static IHttpClientBuilder AddAcdcHttpClient(this IServiceCollection services)
         => services.AddAcdcHttpClient("acdc", null);
 
+    /// <summary>
+    /// Registers the ACDC HTTP client with fluent builder configuration.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configure">A function to configure the builder.</param>
+    /// <returns>The HTTP client builder for further configuration.</returns>
     public static IHttpClientBuilder AddAcdcHttpClient(
         this IServiceCollection services,
         Func<AcdcClientBuilder, AcdcClientBuilder> configure)
         => services.AddAcdcHttpClient("acdc", configure);
 
+    /// <summary>
+    /// Registers a named ACDC HTTP client with optional fluent builder configuration.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="clientName">The named client identifier.</param>
+    /// <param name="configure">An optional function to configure the builder.</param>
+    /// <returns>The HTTP client builder for further configuration.</returns>
     public static IHttpClientBuilder AddAcdcHttpClient(
         this IServiceCollection services,
         string clientName,
@@ -37,6 +58,12 @@ public static class ServiceCollectionExtensions
             clientName, builder.BuildOptions(), builder.GetCustomHandlerTypes());
     }
 
+    /// <summary>
+    /// Registers the ACDC HTTP client using <see cref="IConfiguration"/> binding.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="configuration">The configuration section to bind.</param>
+    /// <returns>The HTTP client builder for further configuration.</returns>
     public static IHttpClientBuilder AddAcdcHttpClient(
         this IServiceCollection services,
         IConfiguration configuration)

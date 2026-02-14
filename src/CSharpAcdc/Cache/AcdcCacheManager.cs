@@ -4,6 +4,9 @@ using ZiggyCreatures.Caching.Fusion;
 
 namespace CSharpAcdc.Cache;
 
+/// <summary>
+/// Manages cache key tracking and provides cache invalidation operations.
+/// </summary>
 public class AcdcCacheManager : IAcdcCacheManager
 {
     private readonly IFusionCache _cache;
@@ -12,18 +15,25 @@ public class AcdcCacheManager : IAcdcCacheManager
     // Maps base URL -> set of known cache keys (including user-prefixed variants)
     private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, byte>> _trackedKeys = new();
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="AcdcCacheManager"/>.
+    /// </summary>
+    /// <param name="cache">The FusionCache instance.</param>
+    /// <param name="logger">The logger instance.</param>
     public AcdcCacheManager(IFusionCache cache, ILogger<AcdcCacheManager> logger)
     {
         _cache = cache;
         _logger = logger;
     }
 
+    /// <inheritdoc />
     public void TrackKey(string cacheKey, string baseUrl)
     {
         var keys = _trackedKeys.GetOrAdd(baseUrl, _ => new ConcurrentDictionary<string, byte>());
         keys.TryAdd(cacheKey, 0);
     }
 
+    /// <inheritdoc />
     public async Task ClearCacheAsync(CancellationToken ct = default)
     {
         _logger.LogDebug("Clearing all tracked cache entries");
@@ -41,6 +51,7 @@ public class AcdcCacheManager : IAcdcCacheManager
         _trackedKeys.Clear();
     }
 
+    /// <inheritdoc />
     public async Task ClearCacheForUrlAsync(string url, CancellationToken ct = default)
     {
         _logger.LogDebug("Clearing cache entries for URL: {Url}", url);
@@ -58,6 +69,7 @@ public class AcdcCacheManager : IAcdcCacheManager
         }
     }
 
+    /// <inheritdoc />
     public async Task ClearCacheForUserAsync(string userId, CancellationToken ct = default)
     {
         _logger.LogDebug("Clearing cache entries for user: {UserId}", userId);
@@ -76,6 +88,7 @@ public class AcdcCacheManager : IAcdcCacheManager
         }
     }
 
+    /// <inheritdoc />
     public async Task InvalidateForBaseUrlAsync(string baseUrl, CancellationToken ct = default)
     {
         _logger.LogDebug("Invalidating cache entries for base URL: {BaseUrl}", baseUrl);

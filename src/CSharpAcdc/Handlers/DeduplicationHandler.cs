@@ -5,6 +5,10 @@ using CSharpAcdc.Extensions;
 
 namespace CSharpAcdc.Handlers;
 
+/// <summary>
+/// Deduplicates concurrent identical GET/HEAD requests so only one upstream call is made.
+/// Subsequent callers share the buffered response from the first request.
+/// </summary>
 public sealed class DeduplicationHandler : DelegatingHandler
 {
     // Instance-scoped dedup state: IHttpClientFactory pools handler instances with ~2-min
@@ -12,6 +16,7 @@ public sealed class DeduplicationHandler : DelegatingHandler
     // span a rotation boundary won't be coalesced — an acceptable minor inefficiency.
     private readonly ConcurrentDictionary<string, Lazy<Task<DeduplicatedResponse>>> _inFlight = new();
 
+    /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
