@@ -4,7 +4,11 @@ public static class HttpRequestMessageExtensions
 {
     public static async Task<HttpRequestMessage> CloneAsync(this HttpRequestMessage request)
     {
-        var clone = new HttpRequestMessage(request.Method, request.RequestUri);
+        var clone = new HttpRequestMessage(request.Method, request.RequestUri)
+        {
+            Version = request.Version,
+            VersionPolicy = request.VersionPolicy,
+        };
 
         foreach (var header in request.Headers)
         {
@@ -14,13 +18,21 @@ public static class HttpRequestMessageExtensions
         if (request.Content is not null)
         {
             var contentBytes = await request.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+
+            // Replace the original content with a replayable ByteArrayContent so the
+            // source request remains sendable after cloning (ReadAsByteArrayAsync may
+            // consume a forward-only stream).
+            var originalContent = new ByteArrayContent(contentBytes);
             var clonedContent = new ByteArrayContent(contentBytes);
 
             foreach (var header in request.Content.Headers)
             {
+                originalContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
                 clonedContent.Headers.TryAddWithoutValidation(header.Key, header.Value);
             }
 
+            request.Content.Dispose();
+            request.Content = originalContent;
             clone.Content = clonedContent;
         }
 

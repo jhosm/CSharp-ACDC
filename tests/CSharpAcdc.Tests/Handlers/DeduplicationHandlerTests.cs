@@ -68,8 +68,10 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        await client.PostAsync("/data", new StringContent("body1"));
-        await client.PostAsync("/data", new StringContent("body2"));
+        using var content1 = new StringContent("body1");
+        using var content2 = new StringContent("body2");
+        await client.PostAsync("/data", content1);
+        await client.PostAsync("/data", content2);
 
         callCount.Should().Be(2);
     }
@@ -91,8 +93,10 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        await client.PutAsync("/data", new StringContent("body1"));
-        await client.PutAsync("/data", new StringContent("body2"));
+        using var content1 = new StringContent("body1");
+        using var content2 = new StringContent("body2");
+        await client.PutAsync("/data", content1);
+        await client.PutAsync("/data", content2);
 
         callCount.Should().Be(2);
     }
@@ -141,8 +145,8 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        var request1 = new HttpRequestMessage(HttpMethod.Head, "/data");
-        var request2 = new HttpRequestMessage(HttpMethod.Head, "/data");
+        using var request1 = new HttpRequestMessage(HttpMethod.Head, "/data");
+        using var request2 = new HttpRequestMessage(HttpMethod.Head, "/data");
 
         var task1 = client.SendAsync(request1);
         await requestStarted.Task;
@@ -174,11 +178,11 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        var request = new HttpRequestMessage(HttpMethod.Get, "/data");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/data");
         request.Options.Set(AcdcRequestOptions.Deduplicate, false);
         await client.SendAsync(request);
 
-        var request2 = new HttpRequestMessage(HttpMethod.Get, "/data");
+        using var request2 = new HttpRequestMessage(HttpMethod.Get, "/data");
         request2.Options.Set(AcdcRequestOptions.Deduplicate, false);
         await client.SendAsync(request2);
 
@@ -235,10 +239,10 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        var request1 = new HttpRequestMessage(HttpMethod.Get, "/data");
+        using var request1 = new HttpRequestMessage(HttpMethod.Get, "/data");
         request1.Headers.Add("Authorization", "Bearer token-a");
 
-        var request2 = new HttpRequestMessage(HttpMethod.Get, "/data");
+        using var request2 = new HttpRequestMessage(HttpMethod.Get, "/data");
         request2.Headers.Add("Authorization", "Bearer token-b");
 
         var task1 = client.SendAsync(request1);
@@ -252,13 +256,22 @@ public class DeduplicationHandlerTests
     }
 
     [Fact]
-    public async Task ResponseCloning_ProducesIndependentResponses()
+    public async Task ResponseCloning_ConcurrentSubscribers_GetIndependentResponses()
     {
-        var innerHandler = new DelegateHandler((req, ct) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        var callCount = 0;
+        var requestStarted = new TaskCompletionSource();
+        var allowResponse = new TaskCompletionSource();
+
+        var innerHandler = new DelegateHandler(async (req, ct) =>
+        {
+            Interlocked.Increment(ref callCount);
+            requestStarted.TrySetResult();
+            await allowResponse.Task.WaitAsync(ct);
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("shared-body"),
-            }));
+            };
+        });
 
         var handler = new DeduplicationHandler { InnerHandler = innerHandler };
         using var client = new HttpClient(handler)
@@ -266,8 +279,18 @@ public class DeduplicationHandlerTests
             BaseAddress = new Uri("https://api.example.com"),
         };
 
-        var response1 = await client.GetAsync("/data");
-        var response2 = await client.GetAsync("/data");
+        // Launch concurrent requests to ensure actual deduplication occurs
+        var task1 = client.GetAsync("/data");
+        await requestStarted.Task;
+        var task2 = client.GetAsync("/data");
+
+        allowResponse.SetResult();
+
+        var response1 = await task1;
+        var response2 = await task2;
+
+        // Should have only made one upstream call
+        callCount.Should().Be(1);
 
         var body1 = await response1.Content.ReadAsStringAsync();
         var body2 = await response2.Content.ReadAsStringAsync();
@@ -343,12 +366,94 @@ public class DeduplicationHandlerTests
     }
 
     [Fact]
+    public async Task FailedRequest_AllowsRetryOnNextWave()
+    {
+        var callCount = 0;
+
+        var innerHandler = new DelegateHandler((req, ct) =>
+        {
+            var count = Interlocked.Increment(ref callCount);
+            if (count == 1)
+                throw new HttpRequestException("Server down");
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("recovered"),
+            });
+        });
+
+        var handler = new DeduplicationHandler { InnerHandler = innerHandler };
+        using var client = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.example.com"),
+        };
+
+        // First request fails
+        var act = () => client.GetAsync("/data");
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        // Second request (after cleanup) should succeed with a fresh upstream call
+        using var response = await client.GetAsync("/data");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Be("recovered");
+        callCount.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task FirstCallerCancellation_DoesNotAffectOtherSubscribers()
+    {
+        var requestStarted = new TaskCompletionSource();
+        var allowResponse = new TaskCompletionSource();
+
+        var innerHandler = new DelegateHandler(async (req, ct) =>
+        {
+            requestStarted.TrySetResult();
+            await allowResponse.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("completed"),
+            };
+        });
+
+        var handler = new DeduplicationHandler { InnerHandler = innerHandler };
+        using var client = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.example.com"),
+        };
+
+        using var cts1 = new CancellationTokenSource();
+
+        // First caller starts the upstream request
+        var task1 = client.GetAsync("/data", cts1.Token);
+        await requestStarted.Task;
+
+        // Second caller joins
+        var task2 = client.GetAsync("/data");
+
+        // First caller cancels — should NOT cancel the shared upstream request
+        cts1.Cancel();
+
+        var act1 = () => task1;
+        await act1.Should().ThrowAsync<OperationCanceledException>();
+
+        // Allow the upstream request to complete
+        allowResponse.SetResult();
+
+        // Second caller should still succeed
+        using var response2 = await task2;
+        response2.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response2.Content.ReadAsStringAsync();
+        body.Should().Be("completed");
+    }
+
+    [Fact]
     public void BuildDeduplicationKey_IsDeterministic()
     {
-        var request1 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request1 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request1.Headers.Add("X-Custom", "value");
 
-        var request2 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var request2 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
         request2.Headers.Add("X-Custom", "value");
 
         var key1 = DeduplicationHandler.BuildDeduplicationKey(request1);
@@ -360,13 +465,71 @@ public class DeduplicationHandlerTests
     [Fact]
     public void BuildDeduplicationKey_DifferentMethods_ProduceDifferentKeys()
     {
-        var get = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
-        var head = new HttpRequestMessage(HttpMethod.Head, "https://api.example.com/test");
+        using var get = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        using var head = new HttpRequestMessage(HttpMethod.Head, "https://api.example.com/test");
 
         var key1 = DeduplicationHandler.BuildDeduplicationKey(get);
         var key2 = DeduplicationHandler.BuildDeduplicationKey(head);
 
         key1.Should().NotBe(key2);
+    }
+
+    [Fact]
+    public void BuildDeduplicationKey_HeaderCaseDifference_ProducesSameKey()
+    {
+        using var request1 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        request1.Headers.Add("X-Custom", "value");
+
+        using var request2 = new HttpRequestMessage(HttpMethod.Get, "https://api.example.com/test");
+        request2.Headers.Add("x-custom", "value");
+
+        var key1 = DeduplicationHandler.BuildDeduplicationKey(request1);
+        var key2 = DeduplicationHandler.BuildDeduplicationKey(request2);
+
+        key1.Should().Be(key2);
+    }
+
+    [Fact]
+    public async Task ConcurrentStress_DeduplicationIsThreadSafe()
+    {
+        var callCount = 0;
+        var requestStarted = new TaskCompletionSource();
+        var allowResponse = new TaskCompletionSource();
+
+        var innerHandler = new DelegateHandler(async (req, ct) =>
+        {
+            Interlocked.Increment(ref callCount);
+            requestStarted.TrySetResult();
+            await allowResponse.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("stress-body"),
+            };
+        });
+
+        var handler = new DeduplicationHandler { InnerHandler = innerHandler };
+        using var client = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.example.com"),
+        };
+
+        const int concurrency = 50;
+        var tasks = Enumerable.Range(0, concurrency)
+            .Select(_ => client.GetAsync("/data"))
+            .ToArray();
+
+        await requestStarted.Task;
+        allowResponse.SetResult();
+
+        var responses = await Task.WhenAll(tasks);
+
+        callCount.Should().Be(1);
+        foreach (var response in responses)
+        {
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var body = await response.Content.ReadAsStringAsync();
+            body.Should().Be("stress-body");
+        }
     }
 
     /// <summary>
