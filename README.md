@@ -9,7 +9,7 @@ Server-only HTTP client library for .NET with authentication, caching, logging, 
 - **Logging** — Structured logging via `ILogger<T>` with sensitive data redaction, slow request warnings, large payload alerts
 - **Error Handling** — Typed exception hierarchy mapping HTTP status codes to specific exception types
 - **Cancellation** — Per-request cancellation tokens with bulk `CancelAll()` support
-- **Deduplication** — Automatic deduplication of concurrent identical GET requests
+- **Deduplication** — Automatic deduplication of concurrent identical GET and HEAD requests
 - **DI-First** — Full `IHttpClientFactory` integration with keyed services and fluent builder API
 
 ## Installation
@@ -102,7 +102,7 @@ Response ← [Logging] ← [Error] ← [Cancellation] ← [Auth] ← [Cache] ←
 | **Auth** | Injects Bearer token, handles proactive/reactive refresh |
 | **Cache** | FusionCache with ETag, SWR, mutation invalidation |
 | **Custom** | User-registered `DelegatingHandler` types |
-| **Dedup** | Deduplicates concurrent identical GET requests |
+| **Dedup** | Deduplicates concurrent identical GET and HEAD requests |
 
 ## Configuration Reference
 
