@@ -7,11 +7,19 @@ using Microsoft.Extensions.Options;
 
 namespace CSharpAcdc.Auth;
 
+/// <summary>
+/// Refreshes tokens using the OAuth 2.1 refresh_token grant type.
+/// </summary>
 public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly AcdcAuthOptions _options;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="OAuthTokenRefreshStrategy"/>.
+    /// </summary>
+    /// <param name="httpClientFactory">Factory for creating the HTTP client used for token requests.</param>
+    /// <param name="options">Authentication configuration options.</param>
     public OAuthTokenRefreshStrategy(
         IHttpClientFactory httpClientFactory,
         IOptions<AcdcAuthOptions> options)
@@ -20,6 +28,7 @@ public sealed class OAuthTokenRefreshStrategy : ITokenRefreshStrategy
         _options = options.Value;
     }
 
+    /// <inheritdoc />
     public async Task<TokenRefreshResult> RefreshAsync(string refreshToken, CancellationToken ct)
     {
         using var client = _httpClientFactory.CreateClient("acdc-auth");

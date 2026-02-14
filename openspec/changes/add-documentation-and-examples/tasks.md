@@ -25,4 +25,4 @@
 ## 3. Other
 
 - [x] 3.1 Create `CHANGELOG.md` with initial 1.0.0 entry following Keep a Changelog format
-- [ ] 3.2 Audit XML doc comments on all public types and members — ensure every public type, method, property, and enum value has a `<summary>` tag
+- [x] 3.2 Audit XML doc comments on all public types and members — ensure every public type, method, property, and enum value has a `<summary>` tag

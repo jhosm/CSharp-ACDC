@@ -9,6 +9,10 @@ using ZiggyCreatures.Caching.Fusion;
 
 namespace CSharpAcdc.Handlers;
 
+/// <summary>
+/// Caches GET/HEAD responses using FusionCache with ETag revalidation, stale-while-revalidate,
+/// and automatic invalidation on mutation requests.
+/// </summary>
 public class CacheHandler : DelegatingHandler
 {
     private readonly IFusionCache _cache;
@@ -22,6 +26,14 @@ public class CacheHandler : DelegatingHandler
     private readonly ConcurrentDictionary<string, (string ETag, CachedResponse Response)> _etagStore = new();
     private const int MaxETagStoreSize = 1000;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="CacheHandler"/>.
+    /// </summary>
+    /// <param name="cache">The FusionCache instance for storing responses.</param>
+    /// <param name="options">Cache configuration options.</param>
+    /// <param name="logger">The logger instance.</param>
+    /// <param name="userIdProvider">Optional delegate to extract user ID for cache key isolation.</param>
+    /// <param name="cacheManager">Optional cache manager for key tracking and invalidation.</param>
     public CacheHandler(
         IFusionCache cache,
         IOptions<AcdcCacheOptions> options,
@@ -36,6 +48,7 @@ public class CacheHandler : DelegatingHandler
         _cacheManager = cacheManager;
     }
 
+    /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

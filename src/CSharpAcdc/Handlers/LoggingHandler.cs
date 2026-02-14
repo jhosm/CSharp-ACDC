@@ -7,6 +7,10 @@ using Microsoft.Extensions.Options;
 
 namespace CSharpAcdc.Handlers;
 
+/// <summary>
+/// Logs HTTP request and response details with sensitive data redaction, slow-request warnings,
+/// and large-payload warnings.
+/// </summary>
 public class LoggingHandler : DelegatingHandler
 {
     private static readonly AsyncLocal<bool> _isLogging = new();
@@ -15,6 +19,11 @@ public class LoggingHandler : DelegatingHandler
     private readonly AcdcLoggingOptions _options;
     private readonly SensitiveDataRedactor _redactor;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="LoggingHandler"/>.
+    /// </summary>
+    /// <param name="logger">The logger instance for structured output.</param>
+    /// <param name="options">The logging configuration options.</param>
     public LoggingHandler(ILogger<LoggingHandler> logger, IOptions<AcdcLoggingOptions> options)
     {
         ArgumentNullException.ThrowIfNull(logger);
@@ -24,6 +33,7 @@ public class LoggingHandler : DelegatingHandler
         _redactor = new SensitiveDataRedactor(_options);
     }
 
+    /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

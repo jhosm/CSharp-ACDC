@@ -9,6 +9,10 @@ using Microsoft.Extensions.Options;
 
 namespace CSharpAcdc.Handlers;
 
+/// <summary>
+/// Injects Bearer tokens into outgoing requests, performs proactive and reactive token refresh,
+/// and retries once on 401 responses after a successful refresh.
+/// </summary>
 public sealed class AuthHandler : DelegatingHandler
 {
     private readonly ITokenProvider _tokenProvider;
@@ -21,6 +25,14 @@ public sealed class AuthHandler : DelegatingHandler
     // The first thread to CAS null → TCS becomes the leader; others wait on the TCS.
     private TaskCompletionSource<bool>? _pendingRefresh;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="AuthHandler"/>.
+    /// </summary>
+    /// <param name="tokenProvider">Provides access and refresh tokens.</param>
+    /// <param name="refreshStrategy">The strategy used to refresh expired tokens.</param>
+    /// <param name="backoffManager">Manages exponential backoff after transient refresh failures.</param>
+    /// <param name="options">Authentication configuration options.</param>
+    /// <param name="logger">The logger instance.</param>
     public AuthHandler(
         ITokenProvider tokenProvider,
         ITokenRefreshStrategy refreshStrategy,
@@ -35,6 +47,7 @@ public sealed class AuthHandler : DelegatingHandler
         _logger = logger;
     }
 
+    /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)

@@ -4,17 +4,29 @@ using CSharpAcdc.Configuration;
 
 namespace CSharpAcdc.Logging;
 
+/// <summary>
+/// Redacts sensitive data from headers, URLs, and JSON bodies based on configured field names.
+/// </summary>
 public class SensitiveDataRedactor
 {
     private const string Redacted = "[REDACTED]";
     private readonly HashSet<string> _sensitiveFields;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="SensitiveDataRedactor"/>.
+    /// </summary>
+    /// <param name="options">The logging options containing sensitive field names.</param>
     public SensitiveDataRedactor(AcdcLoggingOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         _sensitiveFields = new HashSet<string>(options.SensitiveFields, StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Redacts sensitive header values, replacing them with <c>[REDACTED]</c>.
+    /// </summary>
+    /// <param name="headers">The headers to redact.</param>
+    /// <returns>A dictionary with sensitive values replaced.</returns>
     public Dictionary<string, string> RedactHeaders(IEnumerable<KeyValuePair<string, IEnumerable<string>>> headers)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -28,6 +40,11 @@ public class SensitiveDataRedactor
         return result;
     }
 
+    /// <summary>
+    /// Redacts sensitive query string parameters in a URL.
+    /// </summary>
+    /// <param name="uri">The URI to redact.</param>
+    /// <returns>The URI with sensitive query parameters replaced.</returns>
     public string RedactUrl(Uri? uri)
     {
         if (uri is null)
@@ -68,6 +85,11 @@ public class SensitiveDataRedactor
         return builder.Uri.ToString();
     }
 
+    /// <summary>
+    /// Redacts sensitive fields in a JSON body string.
+    /// </summary>
+    /// <param name="body">The JSON body to redact.</param>
+    /// <returns>The redacted JSON string, or a placeholder if the body is not valid JSON.</returns>
     public string? RedactJsonBody(string? body)
     {
         if (string.IsNullOrEmpty(body))

@@ -4,6 +4,10 @@ using Microsoft.Extensions.Options;
 
 namespace CSharpAcdc.Auth;
 
+/// <summary>
+/// Manages authentication lifecycle including token refresh, logout with server-side revocation,
+/// and user identity extraction.
+/// </summary>
 public sealed class AcdcAuthManager
 {
     private readonly ITokenProvider _tokenProvider;
@@ -16,6 +20,16 @@ public sealed class AcdcAuthManager
 
     private volatile bool _logoutRequested;
 
+    /// <summary>
+    /// Initializes a new instance of <see cref="AcdcAuthManager"/>.
+    /// </summary>
+    /// <param name="tokenProvider">The token storage provider.</param>
+    /// <param name="refreshStrategy">The strategy for refreshing expired tokens.</param>
+    /// <param name="backoffManager">Manages exponential backoff after transient failures.</param>
+    /// <param name="httpClientFactory">Factory for creating HTTP clients used in token revocation.</param>
+    /// <param name="options">Authentication configuration options.</param>
+    /// <param name="logger">The logger instance.</param>
+    /// <param name="userIdExtractor">Extracts user identity from requests.</param>
     public AcdcAuthManager(
         ITokenProvider tokenProvider,
         ITokenRefreshStrategy refreshStrategy,
@@ -34,6 +48,10 @@ public sealed class AcdcAuthManager
         _userIdExtractor = userIdExtractor;
     }
 
+    /// <summary>
+    /// Logs out by revoking the refresh token on the server (if configured) and clearing local tokens.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
     public async Task LogoutAsync(CancellationToken ct)
     {
         _logoutRequested = true;
@@ -61,6 +79,10 @@ public sealed class AcdcAuthManager
         }
     }
 
+    /// <summary>
+    /// Forces an immediate token refresh, bypassing proactive refresh thresholds.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
     public async Task ForceRefreshAsync(CancellationToken ct)
     {
         var refreshToken = await _tokenProvider.GetRefreshTokenAsync(ct).ConfigureAwait(false);
@@ -84,6 +106,11 @@ public sealed class AcdcAuthManager
         _logger.LogInformation("Force token refresh completed, expires at {ExpiresAt}", result.ExpiresAt);
     }
 
+    /// <summary>
+    /// Extracts the user ID from the request using claims or JWT parsing.
+    /// </summary>
+    /// <param name="request">The HTTP request to extract user identity from.</param>
+    /// <returns>The user ID, or <c>null</c> if not available.</returns>
     public string? GetUserId(HttpRequestMessage request) => _userIdExtractor.ExtractUserId(request);
 
     private async Task TryRevokeTokenAsync(string? refreshToken, CancellationToken ct)
