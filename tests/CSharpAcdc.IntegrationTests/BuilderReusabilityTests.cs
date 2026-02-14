@@ -44,7 +44,7 @@ public class BuilderReusabilityTests : IDisposable
     }
 
     [Fact]
-    public async Task BuilderConfiguration_IsImmutable()
+    public void BuilderConfiguration_IsImmutable()
     {
         _api.ConfigureGetSuccess("/test", new { ok = true });
 

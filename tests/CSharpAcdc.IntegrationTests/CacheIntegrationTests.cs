@@ -150,11 +150,39 @@ public class CacheIntegrationTests : IDisposable
             DateTimeOffset.UtcNow.AddHours(1),
             CancellationToken.None);
 
-        using var client1 = BuildClient(
-            tokenProvider: tokenProvider1,
-            cacheDuration: TimeSpan.FromMinutes(5),
-            etagEnabled: false,
-            cacheKeyStrategy: CacheKeyStrategy.UserIsolated);
+        var tokenProvider2 = new InMemoryTokenProvider();
+        await tokenProvider2.SaveTokensAsync(
+            user2Token, "refresh-2",
+            DateTimeOffset.UtcNow.AddHours(1),
+            CancellationToken.None);
+
+        // Both clients share the same DI container (and thus the same FusionCache instance).
+        // The test validates CacheKeyStrategy.UserIsolated produces different cache keys
+        // per user within a single shared cache, not container-level isolation.
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        // Register client for user 1 (default "acdc" name)
+        services.AddAcdcHttpClient("acdc", b =>
+        {
+            b = b.WithAuth(auth =>
+            {
+                auth.RefreshEndpoint = _oauth.TokenEndpoint;
+                auth.ClientId = "test-client";
+            });
+            b = b.WithCache(cache =>
+            {
+                cache.Duration = TimeSpan.FromMinutes(5);
+                cache.ETagEnabled = false;
+                cache.CacheKeyStrategy = CacheKeyStrategy.UserIsolated;
+            });
+            return b.WithClientName("acdc");
+        });
+
+        services.AddKeyedSingleton<ITokenProvider>("acdc", tokenProvider1);
+
+        var sp = services.BuildServiceProvider();
+        var client1 = sp.GetRequiredKeyedService<AcdcHttpClient>("acdc");
 
         // User 1 makes a request
         var response1 = await client1.GetAsync($"{_api.Url}/user-data");
@@ -167,24 +195,18 @@ public class CacheIntegrationTests : IDisposable
         // Should only have hit the server once for user 1
         Assert.Equal(1, _api.GetCallCount("/user-data"));
 
-        // Now user 2 — different cache key due to UserIsolated strategy
-        var tokenProvider2 = new InMemoryTokenProvider();
-        await tokenProvider2.SaveTokensAsync(
+        // Swap the token provider to user 2's tokens within the same container.
+        // The cache handler resolves the user ID from the request's Authorization header,
+        // so switching the token provider changes which user ID the CacheKeyBuilder sees.
+        await tokenProvider1.SaveTokensAsync(
             user2Token, "refresh-2",
             DateTimeOffset.UtcNow.AddHours(1),
             CancellationToken.None);
 
-        using var client2 = BuildClient(
-            tokenProvider: tokenProvider2,
-            cacheDuration: TimeSpan.FromMinutes(5),
-            etagEnabled: false,
-            cacheKeyStrategy: CacheKeyStrategy.UserIsolated,
-            clientName: "acdc-user2");
-
-        var response3 = await client2.GetAsync($"{_api.Url}/user-data");
+        var response3 = await client1.GetAsync($"{_api.Url}/user-data");
         Assert.True(response3.IsSuccessStatusCode);
 
-        // Server should have been hit again for user 2 since it's a different cache
+        // Server should have been hit again because user-2's cache key is different
         Assert.Equal(2, _api.GetCallCount("/user-data"));
     }
 

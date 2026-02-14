@@ -12,6 +12,7 @@ namespace CSharpAcdc.IntegrationTests.Helpers;
 public sealed class FakeApiServer : IDisposable
 {
     private readonly WireMockServer _server;
+    private int _scenarioCounter;
 
     public FakeApiServer()
     {
@@ -116,12 +117,14 @@ public sealed class FakeApiServer : IDisposable
     /// </summary>
     public void RespondWith401ThenSuccess(string path, object successBody)
     {
+        var scenario = $"Auth-Retry-{Interlocked.Increment(ref _scenarioCounter)}-{path}";
+
         // WireMock scenario: first call returns 401, subsequent calls return 200
         _server.Given(
             Request.Create()
                 .WithPath(path)
                 .UsingGet())
-            .InScenario("Auth-Retry")
+            .InScenario(scenario)
             .WillSetStateTo("Authenticated")
             .RespondWith(
                 Response.Create()
@@ -133,7 +136,7 @@ public sealed class FakeApiServer : IDisposable
             Request.Create()
                 .WithPath(path)
                 .UsingGet())
-            .InScenario("Auth-Retry")
+            .InScenario(scenario)
             .WhenStateIs("Authenticated")
             .RespondWith(
                 Response.Create()

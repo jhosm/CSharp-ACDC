@@ -47,6 +47,33 @@ public sealed class FakeOAuthServer : IDisposable
     }
 
     /// <summary>
+    /// Configure /token to return a success response with configurable latency.
+    /// </summary>
+    public void ConfigureTokenSuccessWithDelay(
+        TimeSpan delay,
+        string accessToken = "new-access-token",
+        string refreshToken = "new-refresh-token",
+        int expiresIn = 3600)
+    {
+        _server.Given(
+            Request.Create()
+                .WithPath("/token")
+                .UsingPost())
+            .RespondWith(
+                Response.Create()
+                    .WithStatusCode(200)
+                    .WithHeader("Content-Type", "application/json")
+                    .WithBody(JsonSerializer.Serialize(new
+                    {
+                        access_token = accessToken,
+                        refresh_token = refreshToken,
+                        expires_in = expiresIn,
+                        token_type = "Bearer",
+                    }))
+                    .WithDelay(delay));
+    }
+
+    /// <summary>
     /// Configure /token to return an invalid_grant error (auth failure — clears tokens).
     /// </summary>
     public void ConfigureTokenInvalidGrant()
