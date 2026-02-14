@@ -7,4 +7,26 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsPackable)' != 'false'">
+    <Version>1.0.0</Version>
+    <Description>Server-only HTTP client library for .NET with authentication, caching, logging, and structured error handling. Uses DelegatingHandler pipeline with IHttpClientFactory.</Description>
+    <Authors>João Miranda</Authors>
+    <Copyright>Copyright (c) 2026 João Miranda</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/jhosm/CSharp-ACDC</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jhosm/CSharp-ACDC</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>http-client;authentication;caching;delegating-handler;aspnetcore</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <PackageReference Include="Microsoft.SourceLink.GitHub" PrivateAssets="All" />
+  </ItemGroup>
 </Project>
