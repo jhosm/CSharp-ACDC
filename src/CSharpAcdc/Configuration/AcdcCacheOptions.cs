@@ -4,10 +4,10 @@ namespace CSharpAcdc.Configuration;
 
 public record AcdcCacheOptions
 {
-    public TimeSpan Duration { get; init; } = TimeSpan.FromMinutes(5);
-    public TimeSpan? FailSafeMaxDuration { get; init; }
-    public TimeSpan? FactorySoftTimeout { get; init; }
-    public bool AllowTimedOutFactoryBackgroundCompletion { get; init; } = true;
-    public CacheKeyStrategy CacheKeyStrategy { get; init; } = CacheKeyStrategy.Shared;
-    public bool ETagEnabled { get; init; } = true;
+    public TimeSpan Duration { get; set; } = TimeSpan.FromMinutes(5);
+    public TimeSpan? FailSafeMaxDuration { get; set; }
+    public TimeSpan? FactorySoftTimeout { get; set; }
+    public bool AllowTimedOutFactoryBackgroundCompletion { get; set; } = true;
+    public CacheKeyStrategy CacheKeyStrategy { get; set; } = CacheKeyStrategy.Shared;
+    public bool ETagEnabled { get; set; } = true;
 }
