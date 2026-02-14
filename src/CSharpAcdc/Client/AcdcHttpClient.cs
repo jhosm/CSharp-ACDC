@@ -14,7 +14,7 @@ public sealed class AcdcHttpClient : IDisposable
     private readonly AcdcAuthManager? _authManager;
     private readonly IAcdcCacheManager? _cacheManager;
     private readonly ActiveRequestTracker? _requestTracker;
-    private bool _disposed;
+    private int _disposed;
 
     internal AcdcHttpClient(
         HttpClient httpClient,
@@ -180,8 +180,7 @@ public sealed class AcdcHttpClient : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         // Do NOT dispose _httpClient — it is managed by IHttpClientFactory
     }
 }

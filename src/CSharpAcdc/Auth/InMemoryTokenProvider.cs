@@ -4,7 +4,7 @@ namespace CSharpAcdc.Auth;
 /// Thread-safe in-memory implementation of <see cref="ITokenProvider"/>.
 /// Suitable for server-side use where tokens do not need to survive process restarts.
 /// </summary>
-public sealed class InMemoryTokenProvider : ITokenProvider
+public sealed class InMemoryTokenProvider : ITokenProvider, IDisposable
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private string? _accessToken;
@@ -88,4 +88,7 @@ public sealed class InMemoryTokenProvider : ITokenProvider
             _semaphore.Release();
         }
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _semaphore.Dispose();
 }

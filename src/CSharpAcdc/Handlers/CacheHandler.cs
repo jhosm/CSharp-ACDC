@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Runtime.CompilerServices;
 using CSharpAcdc.Cache;
 using CSharpAcdc.Configuration;
 using CSharpAcdc.Extensions;
@@ -13,7 +14,7 @@ namespace CSharpAcdc.Handlers;
 /// Caches GET/HEAD responses using FusionCache with ETag revalidation, stale-while-revalidate,
 /// and automatic invalidation on mutation requests.
 /// </summary>
-public class CacheHandler : DelegatingHandler
+public sealed class CacheHandler : DelegatingHandler
 {
     private readonly IFusionCache _cache;
     private readonly AcdcCacheOptions _options;
@@ -98,7 +99,9 @@ public class CacheHandler : DelegatingHandler
         var storedETag = _options.ETagEnabled ? etagEntry.ETag : null;
         var lastKnownResponse = _options.ETagEnabled ? etagEntry.Response : null;
 
-        var fromCache = true;
+        // Use StrongBox + Volatile to avoid a data race: with AllowTimedOutFactoryBackgroundCompletion,
+        // the factory lambda may write fromCache on a background thread after the main thread returns.
+        var fromCache = new StrongBox<bool>(true);
 
         var entryOptions = BuildEntryOptions(perRequestDuration);
 
@@ -106,13 +109,13 @@ public class CacheHandler : DelegatingHandler
             cacheKey,
             async (ctx, ct) =>
             {
-                fromCache = false;
+                Volatile.Write(ref fromCache.Value, false);
                 return await FetchAndCacheAsync(cacheKey, request, storedETag, lastKnownResponse, ct).ConfigureAwait(false);
             },
             entryOptions,
             token: cancellationToken).ConfigureAwait(false);
 
-        return (result!, fromCache);
+        return (result!, Volatile.Read(ref fromCache.Value));
     }
 
     private async Task<CachedResponse> FetchAndCacheAsync(
@@ -212,9 +215,19 @@ public class CacheHandler : DelegatingHandler
 
     private void TrimETagStoreIfNeeded()
     {
-        if (_etagStore.Count > MaxETagStoreSize)
+        // Snapshot the excess count to avoid TOCTOU: concurrent threads may pass
+        // the size check simultaneously, but each removes only a bounded number of
+        // entries rather than nuking the entire store with Clear().
+        var excess = _etagStore.Count - MaxETagStoreSize;
+        if (excess <= 0)
+            return;
+
+        foreach (var key in _etagStore.Keys)
         {
-            _etagStore.Clear();
+            if (excess <= 0)
+                break;
+            if (_etagStore.TryRemove(key, out _))
+                excess--;
         }
     }
 

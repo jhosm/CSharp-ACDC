@@ -6,7 +6,7 @@ namespace CSharpAcdc.Handlers;
 /// <summary>
 /// Converts non-success HTTP responses and transport exceptions into typed ACDC exceptions.
 /// </summary>
-public class ErrorHandler : DelegatingHandler
+public sealed class ErrorHandler : DelegatingHandler
 {
     /// <inheritdoc />
     protected override async Task<HttpResponseMessage> SendAsync(

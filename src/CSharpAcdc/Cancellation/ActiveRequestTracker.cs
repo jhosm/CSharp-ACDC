@@ -39,23 +39,22 @@ public sealed class ActiveRequestTracker
     /// </summary>
     public void CancelAll()
     {
-        // Remove-then-cancel pattern: avoids the race where a CTS added between
-        // enumeration and Clear() would be silently dropped without being canceled.
-        while (!_activeSources.IsEmpty)
-        {
-            foreach (var cts in _activeSources.Keys)
-            {
-                if (!_activeSources.TryRemove(cts, out _))
-                    continue;
+        // Snapshot keys to guarantee termination: only cancel entries present at
+        // call time. Requests Track()'d after the snapshot are not affected.
+        var snapshot = _activeSources.Keys.ToArray();
 
-                try
-                {
-                    cts.Cancel();
-                }
-                catch (ObjectDisposedException)
-                {
-                    // CTS may have been disposed between removal and cancel.
-                }
+        foreach (var cts in snapshot)
+        {
+            if (!_activeSources.TryRemove(cts, out _))
+                continue;
+
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // CTS may have been disposed between removal and cancel.
             }
         }
     }

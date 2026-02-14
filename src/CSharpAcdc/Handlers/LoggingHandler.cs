@@ -11,7 +11,7 @@ namespace CSharpAcdc.Handlers;
 /// Logs HTTP request and response details with sensitive data redaction, slow-request warnings,
 /// and large-payload warnings.
 /// </summary>
-public class LoggingHandler : DelegatingHandler
+public sealed class LoggingHandler : DelegatingHandler
 {
     private static readonly AsyncLocal<bool> _isLogging = new();
 
