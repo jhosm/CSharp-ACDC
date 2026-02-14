@@ -17,14 +17,23 @@ public record AcdcClientBuilder
 
     public static AcdcClientBuilder Create() => new();
 
-    public AcdcClientBuilder WithAuth(Action<AcdcAuthOptions> configure) =>
-        this with { AuthConfigure = configure };
+    public AcdcClientBuilder WithAuth(Action<AcdcAuthOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        return this with { AuthConfigure = configure };
+    }
 
-    public AcdcClientBuilder WithCache(Action<AcdcCacheOptions> configure) =>
-        this with { CacheConfigure = configure };
+    public AcdcClientBuilder WithCache(Action<AcdcCacheOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        return this with { CacheConfigure = configure };
+    }
 
-    public AcdcClientBuilder WithLogging(Action<AcdcLoggingOptions> configure) =>
-        this with { LoggingConfigure = configure };
+    public AcdcClientBuilder WithLogging(Action<AcdcLoggingOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        return this with { LoggingConfigure = configure };
+    }
 
     public AcdcClientBuilder WithCustomHandler<T>() where T : DelegatingHandler =>
         this with { CustomHandlerTypes = CustomHandlerTypes.Add(typeof(T)) };
@@ -32,11 +41,17 @@ public record AcdcClientBuilder
     public AcdcClientBuilder WithTimeout(TimeSpan timeout) =>
         this with { Timeout = timeout };
 
-    public AcdcClientBuilder WithBaseAddress(Uri baseAddress) =>
-        this with { BaseAddress = baseAddress };
+    public AcdcClientBuilder WithBaseAddress(Uri baseAddress)
+    {
+        ArgumentNullException.ThrowIfNull(baseAddress);
+        return this with { BaseAddress = baseAddress };
+    }
 
-    public AcdcClientBuilder WithClientName(string clientName) =>
-        this with { ClientName = clientName };
+    public AcdcClientBuilder WithClientName(string clientName)
+    {
+        ArgumentNullException.ThrowIfNull(clientName);
+        return this with { ClientName = clientName };
+    }
 
     internal bool HasAuth => AuthConfigure is not null;
     internal bool HasCache => CacheConfigure is not null;
@@ -56,6 +71,17 @@ public record AcdcClientBuilder
         {
             var auth = new AcdcAuthOptions { RefreshEndpoint = "", ClientId = "" };
             AuthConfigure(auth);
+
+            if (string.IsNullOrWhiteSpace(auth.RefreshEndpoint))
+                throw new InvalidOperationException(
+                    "AcdcAuthOptions.RefreshEndpoint is required when auth is configured.");
+            if (string.IsNullOrWhiteSpace(auth.ClientId))
+                throw new InvalidOperationException(
+                    "AcdcAuthOptions.ClientId is required when auth is configured.");
+            if (!Uri.TryCreate(auth.RefreshEndpoint, UriKind.Absolute, out _))
+                throw new InvalidOperationException(
+                    $"AcdcAuthOptions.RefreshEndpoint must be a valid absolute URI, got: '{auth.RefreshEndpoint}'");
+
             options.Auth = auth;
         }
 

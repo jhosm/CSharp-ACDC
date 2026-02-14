@@ -43,6 +43,17 @@ public static class ServiceCollectionExtensions
     {
         var options = new AcdcClientOptions();
         configuration.Bind(options);
+
+        if (options.Auth is not null)
+        {
+            if (string.IsNullOrWhiteSpace(options.Auth.RefreshEndpoint))
+                throw new InvalidOperationException(
+                    "Configuration section 'Auth' is present but 'Auth:RefreshEndpoint' is missing or empty.");
+            if (string.IsNullOrWhiteSpace(options.Auth.ClientId))
+                throw new InvalidOperationException(
+                    "Configuration section 'Auth' is present but 'Auth:ClientId' is missing or empty.");
+        }
+
         return services.AddAcdcHttpClientCore(options.ClientName, options, []);
     }
 
@@ -102,16 +113,19 @@ public static class ServiceCollectionExtensions
             {
                 var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient(clientName);
                 var authManager = hasAuth
-                    ? sp.GetKeyedService<AcdcAuthManager>(clientName) : null;
+                    ? sp.GetRequiredKeyedService<AcdcAuthManager>(clientName) : null;
                 var cacheManager = hasCache
-                    ? sp.GetKeyedService<IAcdcCacheManager>(clientName) : null;
-                var tracker = sp.GetKeyedService<ActiveRequestTracker>(clientName);
+                    ? sp.GetRequiredKeyedService<IAcdcCacheManager>(clientName) : null;
+                var tracker = sp.GetRequiredKeyedService<ActiveRequestTracker>(clientName);
                 return new AcdcHttpClient(httpClient, authManager, cacheManager, tracker);
             });
 
-        // Non-keyed forwarding for default resolution (first registration wins)
-        services.TryAddTransient(sp =>
-            sp.GetRequiredKeyedService<AcdcHttpClient>(clientName));
+        // Non-keyed forwarding for default resolution: only for the default "acdc" client
+        if (string.Equals(clientName, "acdc", StringComparison.OrdinalIgnoreCase))
+        {
+            services.TryAddTransient(sp =>
+                sp.GetRequiredKeyedService<AcdcHttpClient>(clientName));
+        }
 
         // -- Named HttpClient with handler pipeline --
 
@@ -164,14 +178,26 @@ public static class ServiceCollectionExtensions
                     Options.Create(options.Cache!),
                     sp.GetRequiredService<ILogger<CacheHandler>>(),
                     userIdProvider,
-                    sp.GetKeyedService<IAcdcCacheManager>(clientName));
+                    sp.GetRequiredKeyedService<IAcdcCacheManager>(clientName));
             });
         }
 
         foreach (var handlerType in customHandlerTypes)
         {
             httpClientBuilder.AddHttpMessageHandler(sp =>
-                (DelegatingHandler)ActivatorUtilities.CreateInstance(sp, handlerType));
+            {
+                try
+                {
+                    return (DelegatingHandler)ActivatorUtilities.CreateInstance(sp, handlerType);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to create custom handler '{handlerType.FullName}' registered via " +
+                        $"WithCustomHandler<{handlerType.Name}>() in the ACDC pipeline for client '{clientName}'. " +
+                        "Ensure all constructor dependencies are registered in DI.", ex);
+                }
+            });
         }
 
         httpClientBuilder.AddHttpMessageHandler(_ => new DeduplicationHandler());
