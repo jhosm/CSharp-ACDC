@@ -12,7 +12,7 @@ public sealed class AcdcHttpClient : IDisposable
     private readonly ActiveRequestTracker? _requestTracker;
     private bool _disposed;
 
-    public AcdcHttpClient(
+    internal AcdcHttpClient(
         HttpClient httpClient,
         AcdcAuthManager? authManager = null,
         IAcdcCacheManager? cacheManager = null,
@@ -30,7 +30,11 @@ public sealed class AcdcHttpClient : IDisposable
 
     public void CancelAll()
     {
-        _requestTracker?.CancelAll();
+        if (_requestTracker is null)
+            throw new InvalidOperationException(
+                "CancelAll requires an ActiveRequestTracker. " +
+                "Ensure the AcdcHttpClient was constructed via AddAcdcHttpClient() DI registration.");
+        _requestTracker.CancelAll();
     }
 
     public Task<HttpResponseMessage> GetAsync(string? requestUri, CancellationToken ct = default)
