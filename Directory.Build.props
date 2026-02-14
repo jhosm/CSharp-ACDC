@@ -11,8 +11,8 @@
   <PropertyGroup Condition="'$(IsPackable)' != 'false'">
     <Version>1.0.0</Version>
     <Description>Server-only HTTP client library for .NET with authentication, caching, logging, and structured error handling. Uses DelegatingHandler pipeline with IHttpClientFactory.</Description>
-    <Authors>jhosm</Authors>
-    <Copyright>Copyright (c) 2026 jhosm</Copyright>
+    <Authors>João Miranda</Authors>
+    <Copyright>Copyright (c) 2026 João Miranda</Copyright>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/jhosm/CSharp-ACDC</PackageProjectUrl>
     <RepositoryUrl>https://github.com/jhosm/CSharp-ACDC</RepositoryUrl>
