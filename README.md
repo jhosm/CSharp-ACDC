@@ -216,14 +216,21 @@ services.AddAcdcHttpClient(b => b
 
 ## Per-Request Options
 
-Override behavior on individual requests using `HttpRequestMessage.Options`:
+Override behavior on individual requests using fluent extension methods:
 
 ```csharp
 var request = new HttpRequestMessage(HttpMethod.Get, "/api/data");
-request.Options.Set(AcdcRequestOptions.SkipCache, true);    // Bypass cache
-request.Options.Set(AcdcRequestOptions.SkipAuth, true);     // Skip auth header
-request.Options.Set(AcdcRequestOptions.CacheMaxAge, TimeSpan.FromSeconds(30)); // Custom TTL
+request.SkipCache();                                  // Bypass cache
+request.SkipAuth();                                   // Skip auth header
+request.WithCacheMaxAge(TimeSpan.FromSeconds(30));    // Custom TTL
+request.SkipLogging();                                // Suppress logging
+request.SkipDeduplication();                          // Disable dedup
+
+// Methods are chainable:
+request.SkipAuth().SkipLogging().WithCacheMaxAge(TimeSpan.FromSeconds(30));
 ```
+
+The underlying `HttpRequestMessage.Options` keys are also available in `AcdcRequestOptions` for advanced usage.
 
 ## Named Clients
 
@@ -241,6 +248,246 @@ services.AddAcdcHttpClient("service-b", b => b
 // Resolve by key
 var clientA = sp.GetRequiredKeyedService<AcdcHttpClient>("service-a");
 ```
+
+## Custom Handlers
+
+Register custom `DelegatingHandler` types that run between the Cache and Deduplication handlers in the pipeline:
+
+```csharp
+public class CorrelationIdHandler : DelegatingHandler
+{
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        request.Headers.Add("X-Correlation-Id", Guid.NewGuid().ToString());
+        return await base.SendAsync(request, cancellationToken);
+    }
+}
+
+// Register with the builder
+builder.Services.AddTransient<CorrelationIdHandler>();
+builder.Services.AddAcdcHttpClient(b => b
+    .WithCustomHandler<CorrelationIdHandler>());
+```
+
+Custom handlers must be registered in DI (`AddTransient` or `AddScoped`) and must not store per-request state in instance fields since handlers are pooled by `IHttpClientFactory`.
+
+## Token Lifecycle
+
+ACDC handles **refreshing** tokens, not **obtaining** them. Your application's login flow provides the initial tokens, and ACDC keeps them alive:
+
+1. **Your login flow** authenticates the user and obtains initial access + refresh tokens
+2. **You seed the tokens** via `ITokenProvider.SaveTokensAsync()`
+3. **ACDC takes over** — the `AuthHandler` injects the Bearer token on every request and refreshes automatically:
+   - **Proactive refresh**: When the access token is within `RefreshThreshold` of expiry (default 60s), ACDC refreshes in the background without blocking the current request
+   - **Reactive refresh**: On a 401 response, ACDC refreshes and retries the request once
+   - **Concurrent coordination**: Multiple simultaneous 401s share a single refresh call via leader/follower election
+
+The default `InMemoryTokenProvider` stores tokens in memory — tokens are lost on process restart. For persistent storage, implement `ITokenProvider` backed by Redis or a database:
+
+```csharp
+public class RedisTokenProvider : ITokenProvider
+{
+    private readonly IDistributedCache _cache;
+
+    public RedisTokenProvider(IDistributedCache cache) => _cache = cache;
+
+    // Implement GetAccessTokenAsync, SaveTokensAsync, etc.
+    // using _cache.GetStringAsync / _cache.SetStringAsync
+}
+
+// Register before AddAcdcHttpClient
+builder.Services.AddSingleton<ITokenProvider, RedisTokenProvider>();
+```
+
+## Debugging and Observability
+
+### Enable Debug Logging
+
+ACDC uses `ILogger<T>` for all handler logging. Set the log level to `Debug` to see handler internals:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "CSharpAcdc": "Debug"
+    }
+  }
+}
+```
+
+At `Debug` level you'll see: token refresh attempts, proactive refresh triggers, cache hits/misses, backoff delays, and deduplication joins.
+
+### What Each Handler Logs
+
+| Handler | Information level | Debug level |
+|---------|----------|---------|
+| **Logging** | Request/response with redacted headers, timing, status code | — |
+| **Auth** | — | Token refresh success/failure, proactive refresh triggers, backoff state |
+| **Cache** | — | Cache key generation, ETag negotiations |
+| **Cancellation** | Cancellation events | — |
+
+### Slow Request and Large Payload Warnings
+
+The `LoggingHandler` emits `Warning`-level logs for:
+- **Slow requests**: Requests exceeding `SlowRequestThreshold` (default 3s)
+- **Large payloads**: Request or response bodies exceeding `LargePayloadThreshold` (default 1 MiB)
+
+```csharp
+builder.Services.AddAcdcHttpClient(b => b
+    .WithLogging(logging =>
+    {
+        logging.SlowRequestThreshold = TimeSpan.FromSeconds(1);
+        logging.LargePayloadThreshold = 512 * 1024; // 512 KB
+    }));
+```
+
+### Sensitive Data Redaction
+
+Headers matching `SensitiveFields` are replaced with `[REDACTED]` in logs. The default list includes `Authorization`, `Cookie`, `X-Api-Key`, and common credential field names. Add custom fields:
+
+```csharp
+builder.Services.AddAcdcHttpClient(b => b
+    .WithLogging(logging =>
+    {
+        logging.SensitiveFields = AcdcLoggingOptions.DefaultSensitiveFields
+            .Union(new[] { "X-Internal-Token" })
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }));
+```
+
+## Troubleshooting
+
+### Token refresh keeps failing
+
+1. Enable debug logging for `CSharpAcdc` (see above) to see refresh attempts and error details
+2. Check that `RefreshEndpoint` is a valid, reachable URL
+3. Verify `ClientId` and `ClientSecret` match your OAuth provider configuration
+4. After repeated failures, ACDC applies exponential backoff (1s → 2s → 4s → ... → 30s max). The backoff resets after a successful refresh
+
+### Cache not working
+
+1. Verify cache is configured: `.WithCache(cache => ...)` — without this, no `CacheHandler` is registered
+2. Check that requests are `GET` or `HEAD` — other methods bypass the cache
+3. Confirm you haven't set `request.SkipCache()` on the request
+4. For `UserIsolated` cache keys, the `Authorization` header must be present. Without auth, all requests share the same cache key
+
+### `InvalidOperationException` from `CancelAll()`
+
+`ActiveRequestTracker.CancelAll()` cancels all in-flight requests tracked at call time. This is expected behavior — callers should catch `OperationCanceledException`:
+
+```csharp
+try
+{
+    var response = await client.GetAsync("/api/data");
+}
+catch (OperationCanceledException)
+{
+    // Expected after CancelAll() — request was intentionally cancelled
+}
+```
+
+### Requests fail silently
+
+If requests complete without errors but return unexpected data:
+1. Check for `AcdcCacheException` — stale cache entries may be served when the `MaxStaleAge` fail-safe is enabled
+2. Enable debug logging to see if cache is returning stale data
+3. Verify the handler pipeline is registered: `AddAcdcHttpClient()` must be called in DI setup
+
+### `AcdcAuthException` on startup
+
+ACDC doesn't obtain initial tokens. You must seed them before making authenticated requests:
+
+```csharp
+var tokenProvider = app.Services.GetRequiredService<ITokenProvider>();
+await tokenProvider.SaveTokensAsync(accessToken, refreshToken, expiresAt, CancellationToken.None);
+```
+
+## Security Best Practices
+
+- **Always use HTTPS** — ACDC does not enforce TLS but all `RefreshEndpoint` and `BaseAddress` URLs should use `https://`
+- **Never hardcode secrets** — Use `IConfiguration`, environment variables, or a secrets manager (Azure Key Vault, AWS Secrets Manager) for `ClientId` and `ClientSecret`:
+  ```csharp
+  builder.Services.AddAcdcHttpClient(b => b
+      .WithAuth(auth =>
+      {
+          auth.RefreshEndpoint = builder.Configuration["Auth:TokenEndpoint"]!;
+          auth.ClientId = builder.Configuration["Auth:ClientId"]!;
+          auth.ClientSecret = builder.Configuration["Auth:ClientSecret"];
+      }));
+  ```
+- **Token storage** — The default `InMemoryTokenProvider` is suitable for development. In production, implement `ITokenProvider` backed by Redis or a database to survive restarts and share tokens across instances
+- **Sensitive data redaction** — The `LoggingHandler` redacts `Authorization`, `Cookie`, `X-Api-Key`, and other credential headers by default. Review `AcdcLoggingOptions.DefaultSensitiveFields` and add any application-specific headers
+- **Request URL redaction** — Query string parameters matching sensitive field names are also redacted in logs (`?token=abc` becomes `?token=[REDACTED]`)
+
+## Performance Tuning
+
+### Cache Duration
+
+- **Low-latency APIs** (< 100ms): `Duration` of 1-5 minutes reduces upstream load without stale data risk
+- **Expensive queries** (> 500ms): `Duration` of 10-30 minutes with `StaleWhileRevalidateTimeout` of 1-2 seconds gives fast responses while refreshing in the background
+- **Rarely-changing data** (config, feature flags): `Duration` of 1 hour+ with `MaxStaleAge` set even higher for fail-safe
+
+### Stale-While-Revalidate
+
+`StaleWhileRevalidateTimeout` and `MaxStaleAge` work together:
+
+```csharp
+.WithCache(cache =>
+{
+    cache.Duration = TimeSpan.FromMinutes(5);              // Fresh for 5 min
+    cache.MaxStaleAge = TimeSpan.FromHours(1);             // Stale-but-usable for 1 hour
+    cache.StaleWhileRevalidateTimeout = TimeSpan.FromSeconds(1); // Return stale after 1s
+    cache.BackgroundRefreshOnTimeout = true;               // Refresh continues in background
+})
+```
+
+If the downstream API takes 3 seconds and the `StaleWhileRevalidateTimeout` is 1 second, the caller gets the stale value after 1 second while the fresh response is fetched and cached in the background.
+
+### Auth Refresh Threshold
+
+`RefreshThreshold` (default 60s) controls how early proactive refresh starts. For high-traffic services, increase to 120-300s to ensure tokens are always fresh under load. For low-traffic services, the default 60s is sufficient.
+
+### Timeouts
+
+Set `WithTimeout()` based on your downstream SLAs. The default is inherited from `HttpClient` (100 seconds). For microservice-to-microservice calls, 5-10 seconds is typical.
+
+### Deduplication
+
+Deduplication applies only to `GET` and `HEAD` requests with identical URL and headers. It's most effective for:
+- Dashboard pages that fire multiple identical API calls
+- Service meshes where retries create duplicate requests
+
+Disable per-request with `request.SkipDeduplication()` when you need guaranteed fresh responses.
+
+## Architecture
+
+```mermaid
+graph LR
+    A[Your Code] --> B[AcdcHttpClient]
+    B --> C[LoggingHandler]
+    C --> D[ErrorHandler]
+    D --> E[CancellationHandler]
+    E --> F[AuthHandler]
+    F --> G[CacheHandler]
+    G --> H[Custom Handlers]
+    H --> I[DeduplicationHandler]
+    I --> J[HttpClient]
+    J --> K[Server]
+
+    F -- "proactive refresh" --> L[ITokenRefreshStrategy]
+    F -- "token storage" --> M[ITokenProvider]
+    G -- "L1 + L2 cache" --> N[FusionCache]
+
+    style A fill:#e1f5fe
+    style K fill:#e8f5e9
+    style L fill:#fff3e0
+    style M fill:#fff3e0
+    style N fill:#fff3e0
+```
+
+Each handler wraps the next, processing requests left-to-right and responses right-to-left. The `AuthHandler` coordinates with `ITokenProvider` for storage and `ITokenRefreshStrategy` for refresh logic. The `CacheHandler` delegates to FusionCache which manages L1 (in-memory) and optional L2 (Redis) tiers.
 
 ## Contributing
 

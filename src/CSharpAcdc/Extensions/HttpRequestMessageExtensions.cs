@@ -11,6 +11,64 @@ public static class HttpRequestMessageExtensions
     /// </summary>
     /// <param name="request">The request to clone.</param>
     /// <returns>A cloned request that can be sent independently.</returns>
+    /// <summary>
+    /// Bypasses the cache handler for this request.
+    /// </summary>
+    /// <returns>The same request instance for fluent chaining.</returns>
+    public static HttpRequestMessage SkipCache(this HttpRequestMessage request)
+    {
+        request.Options.Set(AcdcRequestOptions.SkipCache, true);
+        return request;
+    }
+
+    /// <summary>
+    /// Skips Bearer token injection for this request.
+    /// </summary>
+    /// <returns>The same request instance for fluent chaining.</returns>
+    public static HttpRequestMessage SkipAuth(this HttpRequestMessage request)
+    {
+        request.Options.Set(AcdcRequestOptions.SkipAuth, true);
+        return request;
+    }
+
+    /// <summary>
+    /// Skips request/response logging for this request.
+    /// </summary>
+    /// <returns>The same request instance for fluent chaining.</returns>
+    public static HttpRequestMessage SkipLogging(this HttpRequestMessage request)
+    {
+        request.Options.Set(AcdcRequestOptions.SkipLogging, true);
+        return request;
+    }
+
+    /// <summary>
+    /// Disables deduplication for this request.
+    /// </summary>
+    /// <returns>The same request instance for fluent chaining.</returns>
+    public static HttpRequestMessage SkipDeduplication(this HttpRequestMessage request)
+    {
+        request.Options.Set(AcdcRequestOptions.Deduplicate, false);
+        return request;
+    }
+
+    /// <summary>
+    /// Overrides the cache duration for this specific request.
+    /// </summary>
+    /// <param name="request">The request to configure.</param>
+    /// <param name="maxAge">The cache duration override.</param>
+    /// <returns>The same request instance for fluent chaining.</returns>
+    public static HttpRequestMessage WithCacheMaxAge(this HttpRequestMessage request, TimeSpan maxAge)
+    {
+        request.Options.Set(AcdcRequestOptions.CacheMaxAge, maxAge);
+        return request;
+    }
+
+    /// <summary>
+    /// Creates a deep clone of the request including headers, content, and options.
+    /// The original request's content is replaced with a replayable <see cref="ByteArrayContent"/>.
+    /// </summary>
+    /// <param name="request">The request to clone.</param>
+    /// <returns>A cloned request that can be sent independently.</returns>
     public static async Task<HttpRequestMessage> CloneAsync(this HttpRequestMessage request)
     {
         var clone = new HttpRequestMessage(request.Method, request.RequestUri)

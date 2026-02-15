@@ -8,6 +8,82 @@ namespace CSharpAcdc.Tests.Extensions;
 public class HttpRequestMessageExtensionsTests
 {
     [Fact]
+    public void SkipCache_SetsOption()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        var result = request.SkipCache();
+
+        result.Should().BeSameAs(request);
+        request.Options.TryGetValue(AcdcRequestOptions.SkipCache, out var value).Should().BeTrue();
+        value.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SkipAuth_SetsOption()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        var result = request.SkipAuth();
+
+        result.Should().BeSameAs(request);
+        request.Options.TryGetValue(AcdcRequestOptions.SkipAuth, out var value).Should().BeTrue();
+        value.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SkipLogging_SetsOption()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        var result = request.SkipLogging();
+
+        result.Should().BeSameAs(request);
+        request.Options.TryGetValue(AcdcRequestOptions.SkipLogging, out var value).Should().BeTrue();
+        value.Should().BeTrue();
+    }
+
+    [Fact]
+    public void SkipDeduplication_SetsOption()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        var result = request.SkipDeduplication();
+
+        result.Should().BeSameAs(request);
+        request.Options.TryGetValue(AcdcRequestOptions.Deduplicate, out var value).Should().BeTrue();
+        value.Should().BeFalse();
+    }
+
+    [Fact]
+    public void WithCacheMaxAge_SetsOption()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+        var duration = TimeSpan.FromSeconds(30);
+
+        var result = request.WithCacheMaxAge(duration);
+
+        result.Should().BeSameAs(request);
+        request.Options.TryGetValue(AcdcRequestOptions.CacheMaxAge, out var value).Should().BeTrue();
+        value.Should().Be(duration);
+    }
+
+    [Fact]
+    public void FluentChaining_SetsMultipleOptions()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "https://example.com");
+
+        request.SkipAuth().SkipLogging().WithCacheMaxAge(TimeSpan.FromMinutes(1));
+
+        request.Options.TryGetValue(AcdcRequestOptions.SkipAuth, out var skipAuth).Should().BeTrue();
+        skipAuth.Should().BeTrue();
+        request.Options.TryGetValue(AcdcRequestOptions.SkipLogging, out var skipLogging).Should().BeTrue();
+        skipLogging.Should().BeTrue();
+        request.Options.TryGetValue(AcdcRequestOptions.CacheMaxAge, out var maxAge).Should().BeTrue();
+        maxAge.Should().Be(TimeSpan.FromMinutes(1));
+    }
+
+    [Fact]
     public async Task CloneAsync_CopiesMethodAndUri()
     {
         using var original = new HttpRequestMessage(HttpMethod.Post, "https://api.example.com/data");
