@@ -1,5 +1,9 @@
 # CSharp-ACDC
 
+[![CI](https://github.com/jhosm/CSharp-ACDC/actions/workflows/ci.yml/badge.svg)](https://github.com/jhosm/CSharp-ACDC/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/CSharpAcdc)](https://www.nuget.org/packages/CSharpAcdc)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Server-only HTTP client library for .NET with authentication, caching, logging, and structured error handling. Uses `DelegatingHandler` pipeline with `IHttpClientFactory`.
 
 ## Features
