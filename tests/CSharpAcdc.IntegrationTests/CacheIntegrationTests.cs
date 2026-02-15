@@ -75,8 +75,8 @@ public class CacheIntegrationTests : IDisposable
             tokenProvider: tokenProvider,
             cacheDuration: TimeSpan.FromMilliseconds(100),
             etagEnabled: false,
-            failSafeMaxDuration: TimeSpan.FromMinutes(5),
-            factorySoftTimeout: TimeSpan.FromMilliseconds(50));
+            maxStaleAge: TimeSpan.FromMinutes(5),
+            staleWhileRevalidateTimeout: TimeSpan.FromMilliseconds(50));
 
         // Pre-populate cache by making initial request (need a fast response first)
         _api.Reset();
@@ -228,8 +228,8 @@ public class CacheIntegrationTests : IDisposable
         InMemoryTokenProvider? tokenProvider = null,
         TimeSpan? cacheDuration = null,
         bool etagEnabled = true,
-        TimeSpan? failSafeMaxDuration = null,
-        TimeSpan? factorySoftTimeout = null,
+        TimeSpan? maxStaleAge = null,
+        TimeSpan? staleWhileRevalidateTimeout = null,
         CacheKeyStrategy cacheKeyStrategy = CacheKeyStrategy.Shared,
         string clientName = "acdc")
     {
@@ -249,10 +249,10 @@ public class CacheIntegrationTests : IDisposable
                 cache.Duration = cacheDuration ?? TimeSpan.FromMinutes(5);
                 cache.ETagEnabled = etagEnabled;
                 cache.CacheKeyStrategy = cacheKeyStrategy;
-                if (failSafeMaxDuration.HasValue)
-                    cache.FailSafeMaxDuration = failSafeMaxDuration.Value;
-                if (factorySoftTimeout.HasValue)
-                    cache.FactorySoftTimeout = factorySoftTimeout.Value;
+                if (maxStaleAge.HasValue)
+                    cache.MaxStaleAge = maxStaleAge.Value;
+                if (staleWhileRevalidateTimeout.HasValue)
+                    cache.StaleWhileRevalidateTimeout = staleWhileRevalidateTimeout.Value;
             });
 
             return b.WithClientName(clientName);

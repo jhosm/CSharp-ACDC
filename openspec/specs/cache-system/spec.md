@@ -67,27 +67,27 @@ CacheHandler SHALL resolve `304 Not Modified` responses from the downstream serv
 - **THEN** CacheHandler SHALL return the 304 response as-is to the caller without attempting resolution
 
 ### Requirement: Stale-While-Revalidate
-CacheHandler SHALL support stale-while-revalidate (SWR) semantics using FusionCache's `FactorySoftTimeout`. When a cached entry is expired but the downstream refresh takes longer than the configured `FactorySoftTimeout`, CacheHandler SHALL return the stale cached data immediately and complete the refresh in the background.
+CacheHandler SHALL support stale-while-revalidate (SWR) semantics using FusionCache's `StaleWhileRevalidateTimeout`. When a cached entry is expired but the downstream refresh takes longer than the configured `StaleWhileRevalidateTimeout`, CacheHandler SHALL return the stale cached data immediately and complete the refresh in the background.
 
 #### Scenario: Stale data returned when refresh is slow
 - **WHEN** a GET request is sent for a URL with an expired cached entry
-- **AND** the downstream service takes longer than `AcdcCacheOptions.FactorySoftTimeout` to respond
+- **AND** the downstream service takes longer than `AcdcCacheOptions.StaleWhileRevalidateTimeout` to respond
 - **THEN** CacheHandler SHALL return the stale cached response immediately
-- **AND** `AcdcCacheOptions.AllowTimedOutFactoryBackgroundCompletion` SHALL ensure the refresh continues in the background
+- **AND** `AcdcCacheOptions.BackgroundRefreshOnTimeout` SHALL ensure the refresh continues in the background
 
 #### Scenario: Fresh data returned when refresh is fast
 - **WHEN** a GET request is sent for a URL with an expired cached entry
-- **AND** the downstream service responds within `AcdcCacheOptions.FactorySoftTimeout`
+- **AND** the downstream service responds within `AcdcCacheOptions.StaleWhileRevalidateTimeout`
 - **THEN** CacheHandler SHALL return the fresh downstream response
 - **AND** SHALL update the cached entry with the fresh response
 
 ### Requirement: Stale-If-Error
-CacheHandler SHALL return stale cached data when the downstream request fails, using FusionCache's fail-safe mechanism (`IsFailSafeEnabled`). Stale data SHALL remain usable as fail-safe for the duration specified in `AcdcCacheOptions.FailSafeMaxDuration`.
+CacheHandler SHALL return stale cached data when the downstream request fails, using FusionCache's fail-safe mechanism (`IsFailSafeEnabled`). Stale data SHALL remain usable as fail-safe for the duration specified in `AcdcCacheOptions.MaxStaleAge`.
 
 #### Scenario: Stale data returned on downstream failure
 - **WHEN** a GET request is sent for a URL with an expired cached entry
 - **AND** the downstream service returns a 500 error or throws an exception
-- **AND** `IsFailSafeEnabled` is true (derived from `FailSafeMaxDuration` being configured)
+- **AND** `IsFailSafeEnabled` is true (derived from `MaxStaleAge` being configured)
 - **THEN** CacheHandler SHALL return the stale cached response instead of propagating the error
 
 #### Scenario: No stale data available on downstream failure
@@ -95,8 +95,8 @@ CacheHandler SHALL return stale cached data when the downstream request fails, u
 - **AND** the downstream service returns a 500 error
 - **THEN** CacheHandler SHALL propagate the error as normal (no fail-safe data available)
 
-#### Scenario: Stale data expired beyond FailSafeMaxDuration
-- **WHEN** a GET request is sent for a URL with a cached entry that expired longer ago than `FailSafeMaxDuration`
+#### Scenario: Stale data expired beyond MaxStaleAge
+- **WHEN** a GET request is sent for a URL with a cached entry that expired longer ago than `MaxStaleAge`
 - **AND** the downstream service fails
 - **THEN** CacheHandler SHALL propagate the error (stale data is too old for fail-safe)
 
@@ -198,10 +198,10 @@ CacheHandler SHALL support per-user cache isolation by including the user ID in 
 - **THEN** `Duration` SHALL default to a reasonable TTL (e.g., 5 minutes)
 - **AND** `ETagEnabled` SHALL default to `true`
 - **AND** `CacheKeyStrategy` SHALL default to shared
-- **AND** `AllowTimedOutFactoryBackgroundCompletion` SHALL default to `true`
+- **AND** `BackgroundRefreshOnTimeout` SHALL default to `true`
 
 #### Scenario: Custom SWR configuration
-- **WHEN** `AcdcCacheOptions` is configured with `FactorySoftTimeout = TimeSpan.FromSeconds(2)` and `FailSafeMaxDuration = TimeSpan.FromHours(1)`
+- **WHEN** `AcdcCacheOptions` is configured with `StaleWhileRevalidateTimeout = TimeSpan.FromSeconds(2)` and `MaxStaleAge = TimeSpan.FromHours(1)`
 - **THEN** CacheHandler SHALL use these values when configuring FusionCache entry options
 - **AND** stale-while-revalidate SHALL activate after 2 seconds
 - **AND** fail-safe data SHALL remain available for up to 1 hour

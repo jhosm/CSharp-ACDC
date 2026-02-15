@@ -47,7 +47,7 @@ public class CacheHandlerSwrTests : IDisposable
     }
 
     [Fact]
-    public async Task Get_FactorySoftTimeout_ReturnsStaleData()
+    public async Task Get_StaleWhileRevalidateTimeout_ReturnsStaleData()
     {
         var callCount = 0;
 
@@ -56,7 +56,7 @@ public class CacheHandlerSwrTests : IDisposable
             Interlocked.Increment(ref callCount);
             if (callCount > 1)
             {
-                // Simulate slow factory exceeding FactorySoftTimeout
+                // Simulate slow factory exceeding StaleWhileRevalidateTimeout
                 await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
             }
 
@@ -67,9 +67,9 @@ public class CacheHandlerSwrTests : IDisposable
         }, new AcdcCacheOptions
         {
             Duration = TimeSpan.FromMilliseconds(1),
-            FactorySoftTimeout = TimeSpan.FromMilliseconds(50),
-            FailSafeMaxDuration = TimeSpan.FromHours(1),
-            AllowTimedOutFactoryBackgroundCompletion = true,
+            StaleWhileRevalidateTimeout = TimeSpan.FromMilliseconds(50),
+            MaxStaleAge = TimeSpan.FromHours(1),
+            BackgroundRefreshOnTimeout = true,
         });
 
         // First call -- populate cache
@@ -106,7 +106,7 @@ public class CacheHandlerSwrTests : IDisposable
         }, new AcdcCacheOptions
         {
             Duration = TimeSpan.FromMilliseconds(1),
-            FailSafeMaxDuration = TimeSpan.FromHours(1),
+            MaxStaleAge = TimeSpan.FromHours(1),
         });
 
         // First call -- populate cache
@@ -143,7 +143,7 @@ public class CacheHandlerSwrTests : IDisposable
         }, new AcdcCacheOptions
         {
             Duration = TimeSpan.FromMilliseconds(1),
-            // FailSafeMaxDuration is null -- fail-safe is disabled
+            // MaxStaleAge is null -- fail-safe is disabled
         });
 
         // First call -- populate cache
@@ -163,15 +163,15 @@ public class CacheHandlerSwrTests : IDisposable
         var options = new AcdcCacheOptions
         {
             Duration = TimeSpan.FromMinutes(5),
-            FailSafeMaxDuration = TimeSpan.FromHours(24),
-            FactorySoftTimeout = TimeSpan.FromMilliseconds(100),
-            AllowTimedOutFactoryBackgroundCompletion = true,
+            MaxStaleAge = TimeSpan.FromHours(24),
+            StaleWhileRevalidateTimeout = TimeSpan.FromMilliseconds(100),
+            BackgroundRefreshOnTimeout = true,
         };
 
         options.Duration.Should().Be(TimeSpan.FromMinutes(5));
-        options.FailSafeMaxDuration.Should().Be(TimeSpan.FromHours(24));
-        options.FactorySoftTimeout.Should().Be(TimeSpan.FromMilliseconds(100));
-        options.AllowTimedOutFactoryBackgroundCompletion.Should().BeTrue();
+        options.MaxStaleAge.Should().Be(TimeSpan.FromHours(24));
+        options.StaleWhileRevalidateTimeout.Should().Be(TimeSpan.FromMilliseconds(100));
+        options.BackgroundRefreshOnTimeout.Should().BeTrue();
     }
 
     private sealed class StubHandler : DelegatingHandler

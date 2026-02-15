@@ -57,8 +57,8 @@ builder.Services.AddAcdcHttpClient(b => b
         cache.Duration = TimeSpan.FromMinutes(10);
         cache.ETagEnabled = true;
         cache.CacheKeyStrategy = CacheKeyStrategy.UserIsolated;
-        cache.FailSafeMaxDuration = TimeSpan.FromHours(1);
-        cache.FactorySoftTimeout = TimeSpan.FromSeconds(1);
+        cache.MaxStaleAge = TimeSpan.FromHours(1);
+        cache.StaleWhileRevalidateTimeout = TimeSpan.FromSeconds(1);
     }));
 ```
 
@@ -124,9 +124,9 @@ Response ← [Logging] ← [Error] ← [Cancellation] ← [Auth] ← [Cache] ←
 | `Duration` | `TimeSpan` | 5 min | Cache entry lifetime |
 | `ETagEnabled` | `bool` | `true` | Enable ETag/If-None-Match revalidation |
 | `CacheKeyStrategy` | `CacheKeyStrategy` | `Shared` | `Shared`, `UserIsolated`, or `NoCache` |
-| `FailSafeMaxDuration` | `TimeSpan?` | `null` | Max stale data lifetime (enables fail-safe) |
-| `FactorySoftTimeout` | `TimeSpan?` | `null` | Timeout before returning stale data (SWR) |
-| `AllowTimedOutFactoryBackgroundCompletion` | `bool` | `true` | Continue refresh in background after SWR |
+| `MaxStaleAge` | `TimeSpan?` | `null` | Max stale data lifetime (enables fail-safe) |
+| `StaleWhileRevalidateTimeout` | `TimeSpan?` | `null` | Timeout before returning stale data (SWR) |
+| `BackgroundRefreshOnTimeout` | `bool` | `true` | Continue refresh in background after SWR |
 
 ### AcdcLoggingOptions
 

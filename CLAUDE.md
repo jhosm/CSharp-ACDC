@@ -85,7 +85,7 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Status
 
-Research/planning phase. No C# code written yet. Detailed analysis of the Dart source lives in `research/`. 11 OpenSpec change proposals (P1-P11) are planned — see roadmap below.
+**v1.0.0 shipped.** All 11 OpenSpec change proposals (P1-P11) are implemented and archived. The library is fully functional with auth, caching, logging, cancellation, deduplication, and structured error handling.
 
 ## Implementation Roadmap
 
@@ -96,61 +96,41 @@ Research/planning phase. No C# code written yet. Detailed analysis of the Dart s
 - **Default timeout**: 5 seconds (matches Dart-ACDC)
 - **`AcdcSecurityException`**: Skipped (server cert validation uses `HttpClientHandler` callback)
 
-### Proposal Dependency Graph
+### Completed Proposals
 
-```
-P1: add-solution-scaffold
-  |
-  +---> P9: add-ci-and-nuget-publishing    (.github/ only — no code conflicts)
-  |
-P2: add-exceptions-and-error-handler
-  |
-  +---> P3: add-logging-handler           \
-  +---> P4: add-cancellation-and-dedup     |-- ALL PARALLEL
-  +---> P5: add-auth-system               |
-  +---> P6: add-cache-system              /
-         |
-P7: add-builder-and-di  <-- waits for P3+P4+P5+P6
-  |
-  +---> P8:  add-integration-tests         \
-  +---> P10: add-documentation-and-examples |-- PARALLEL
-  +---> P11: add-nuget-package-metadata    /
-```
+All proposals are implemented and archived in `openspec/changes/archive/`:
 
-### Proposal Summary
-
-| # | Change ID | Layer | Size | Depends On | Parallel With |
-|---|-----------|-------|------|------------|---------------|
-| P1 | `add-solution-scaffold` | 0 | S | — | — |
-| P2 | `add-exceptions-and-error-handler` | 1 | M | P1 | P9 |
-| P3 | `add-logging-handler` | 2 | S | P2 | P4, P5, P6, P9 |
-| P4 | `add-cancellation-and-dedup-handlers` | 2 | M | P2 | P3, P5, P6, P9 |
-| P5 | `add-auth-system` | 2 | L | P2 | P3, P4, P6, P9 |
-| P6 | `add-cache-system` | 2 | L | P2 | P3, P4, P5, P9 |
-| P7 | `add-builder-and-di` | 3 | M | P3-P6 | P9 |
-| P8 | `add-integration-tests` | 4 | M | P7 | P10, P11 |
-| P9 | `add-ci-and-nuget-publishing` | 1 | M | P1 | P2-P8 |
-| P10 | `add-documentation-and-examples` | 4 | M | P7 | P8, P11 |
-| P11 | `add-nuget-package-metadata` | 4 | S | P7 | P8, P10 |
-
-**Critical path**: P1 → P2 → P5 (largest) → P7 → P8
-
-**Strategy**: Hybrid (layered foundation + parallel features). All NuGet packages are front-loaded in P1 via `Directory.Packages.props` to eliminate `.csproj` merge conflicts. Interfaces are designed alongside their consumers (exceptions with ErrorHandler, auth interfaces with AuthHandler) to prevent interface instability. Full details in `.claude/plans/playful-finding-octopus.md`.
+| # | Change ID | Status |
+|---|-----------|--------|
+| P1 | `add-solution-scaffold` | Archived |
+| P2 | `add-exceptions-and-error-handler` | Archived |
+| P3 | `add-logging-handler` | Archived |
+| P4 | `add-cancellation-and-dedup-handlers` | Archived |
+| P5 | `add-auth-system` | Archived |
+| P6 | `add-cache-system` | Archived |
+| P7 | `add-builder-and-di` | Archived |
+| P8 | `add-integration-tests` | Archived |
+| P9 | `add-ci-and-nuget-publishing` | Archived |
+| P10 | `add-documentation-and-examples` | Archived |
+| P11 | `add-nuget-package-metadata` | Archived |
 
 ## Prerequisites
 
 - .NET 10 SDK
-- Redis (for integration tests with L2 cache — P8)
-- `openspec` CLI (manages change proposals)
+- Redis (for integration tests with L2 cache)
 - `bd` CLI (issue tracking via beads)
 
 ## Commands
 
 ```bash
+# Build and test
+dotnet build                               # Build solution
+dotnet test                                # Run all tests
+dotnet test tests/CSharpAcdc.Tests         # Unit tests only
+dotnet test tests/CSharpAcdc.IntegrationTests  # Integration tests only
+
 # OpenSpec — change proposal workflow
 openspec list                              # List all proposals and status
-openspec validate <change-id>              # Validate a proposal
-openspec apply <change-id>                 # Apply a proposal (merges spec deltas)
 openspec archive <change-id>               # Archive a completed proposal
 
 # Beads — issue tracking
@@ -161,41 +141,24 @@ bd close <id>                              # Complete work
 bd sync                                    # Sync with git
 ```
 
-Once P1 scaffold lands:
-```bash
-dotnet build                               # Build solution
-dotnet test                                # Run all tests
-dotnet test tests/CSharpAcdc.Tests         # Unit tests only
-dotnet test tests/CSharpAcdc.IntegrationTests  # Integration tests only
-```
-
 ## Repository Structure
 
-```
-openspec/
-  AGENTS.md                                # OpenSpec conventions and format rules
-  project.md                               # Tech stack, code style, architecture patterns
-  changes/                                 # Change proposals (P1-P11) — created as work begins
-  specs/                                   # Current truth — populated as proposals are archived
-research/
-  01-architecture-and-interceptors.md      # Builder, interceptor chain, extension methods
-  02-authentication-and-security.md        # Auth, token refresh, cert pinning, JWT
-  03-caching-and-offline.md                # Two-tier cache, SWR, offline fallback
-  04-exceptions-tests-dependencies.md      # Exceptions, tests, dependency mapping
-  *-REVIEW.md                             # Cross-review corrections (incorporated into main docs)
-.claude/
-  commands/openspec/                       # Slash commands: /apply, /archive, /proposal
-  plans/playful-finding-octopus.md         # Full proposal breakdown with rationale
-```
-
-After P1 lands, the source tree will be:
 ```
 src/CSharpAcdc/                            # Library (namespace: CSharpAcdc)
   Exceptions/  Handlers/  Auth/  Cache/
   Logging/  Configuration/  Extensions/
-  Builder/  Client/
+  Builder/  Client/  Cancellation/
 tests/CSharpAcdc.Tests/                    # Unit tests (xUnit + NSubstitute)
 tests/CSharpAcdc.IntegrationTests/         # Integration tests (WireMock.Net)
+samples/
+  BasicUsage/                              # Zero-config GET request to httpbin.org
+  AuthenticatedClient/                     # OAuth 2.1 auth with token seeding
+  CachedClient/                            # Caching with SWR and ETag support
+  FullPipeline/                            # All features: auth + cache + logging
+openspec/
+  specs/                                   # Archived spec deltas from all proposals
+  changes/archive/                         # Archived change proposals (P1-P11)
+research/                                  # Dart-ACDC analysis docs
 ```
 
 ## Server-Only Scope

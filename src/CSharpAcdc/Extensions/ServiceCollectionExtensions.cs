@@ -238,18 +238,18 @@ public static class ServiceCollectionExtensions
         {
             Duration = cacheOptions.Duration,
             AllowTimedOutFactoryBackgroundCompletion =
-                cacheOptions.AllowTimedOutFactoryBackgroundCompletion,
+                cacheOptions.BackgroundRefreshOnTimeout,
         };
 
-        if (cacheOptions.FailSafeMaxDuration.HasValue)
+        if (cacheOptions.MaxStaleAge.HasValue)
         {
             entryOptions.IsFailSafeEnabled = true;
-            entryOptions.FailSafeMaxDuration = cacheOptions.FailSafeMaxDuration.Value;
+            entryOptions.FailSafeMaxDuration = cacheOptions.MaxStaleAge.Value;
         }
 
-        if (cacheOptions.FactorySoftTimeout.HasValue)
+        if (cacheOptions.StaleWhileRevalidateTimeout.HasValue)
         {
-            entryOptions.FactorySoftTimeout = cacheOptions.FactorySoftTimeout.Value;
+            entryOptions.FactorySoftTimeout = cacheOptions.StaleWhileRevalidateTimeout.Value;
         }
 
         return entryOptions;

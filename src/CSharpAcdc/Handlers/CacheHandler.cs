@@ -99,7 +99,7 @@ public sealed class CacheHandler : DelegatingHandler
         var storedETag = _options.ETagEnabled ? etagEntry.ETag : null;
         var lastKnownResponse = _options.ETagEnabled ? etagEntry.Response : null;
 
-        // Use StrongBox + Volatile to avoid a data race: with AllowTimedOutFactoryBackgroundCompletion,
+        // Use StrongBox + Volatile to avoid a data race: with BackgroundRefreshOnTimeout,
         // the factory lambda may write fromCache on a background thread after the main thread returns.
         var fromCache = new StrongBox<bool>(true);
 
@@ -126,7 +126,7 @@ public sealed class CacheHandler : DelegatingHandler
         CancellationToken cancellationToken)
     {
         // Clone the request to avoid mutating the caller's instance.
-        // With AllowTimedOutFactoryBackgroundCompletion, the factory may continue
+        // With BackgroundRefreshOnTimeout, the factory may continue
         // after the soft timeout returns stale data, creating a race on the original request.
         using var clonedRequest = CloneRequest(request);
 
@@ -164,18 +164,18 @@ public sealed class CacheHandler : DelegatingHandler
         var entryOptions = new FusionCacheEntryOptions
         {
             Duration = perRequestDuration ?? _options.Duration,
-            AllowTimedOutFactoryBackgroundCompletion = _options.AllowTimedOutFactoryBackgroundCompletion,
+            AllowTimedOutFactoryBackgroundCompletion = _options.BackgroundRefreshOnTimeout,
         };
 
-        if (_options.FailSafeMaxDuration.HasValue)
+        if (_options.MaxStaleAge.HasValue)
         {
             entryOptions.IsFailSafeEnabled = true;
-            entryOptions.FailSafeMaxDuration = _options.FailSafeMaxDuration.Value;
+            entryOptions.FailSafeMaxDuration = _options.MaxStaleAge.Value;
         }
 
-        if (_options.FactorySoftTimeout.HasValue)
+        if (_options.StaleWhileRevalidateTimeout.HasValue)
         {
-            entryOptions.FactorySoftTimeout = _options.FactorySoftTimeout.Value;
+            entryOptions.FactorySoftTimeout = _options.StaleWhileRevalidateTimeout.Value;
         }
 
         return entryOptions;

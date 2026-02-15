@@ -12,8 +12,8 @@ services.AddAcdcHttpClient(b => b
         cache.Duration = TimeSpan.FromMinutes(10);
         cache.ETagEnabled = true;
         cache.CacheKeyStrategy = CacheKeyStrategy.Shared;
-        cache.FailSafeMaxDuration = TimeSpan.FromHours(1);
-        cache.FactorySoftTimeout = TimeSpan.FromSeconds(1);
+        cache.MaxStaleAge = TimeSpan.FromHours(1);
+        cache.StaleWhileRevalidateTimeout = TimeSpan.FromSeconds(1);
     })
     .WithBaseAddress(new Uri("https://httpbin.org")));
 
