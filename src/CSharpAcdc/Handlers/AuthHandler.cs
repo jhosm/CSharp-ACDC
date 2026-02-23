@@ -75,7 +75,7 @@ public sealed class AuthHandler : DelegatingHandler
         // Buffer content before first send so it can be re-read on 401 retry clone.
         // No-op for already-buffered types (StringContent, ByteArrayContent).
         if (request.Content is not null)
-            await request.Content.LoadIntoBufferAsync(cancellationToken).ConfigureAwait(false);
+            await request.Content.LoadIntoBufferAsync().ConfigureAwait(false);
 
         var response = await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
