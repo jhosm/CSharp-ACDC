@@ -16,7 +16,7 @@ public sealed class AcdcHttpClient : IDisposable
     private readonly ActiveRequestTracker? _requestTracker;
     private int _disposed;
 
-    internal AcdcHttpClient(
+    public AcdcHttpClient(
         HttpClient httpClient,
         AcdcAuthManager? authManager = null,
         IAcdcCacheManager? cacheManager = null,
